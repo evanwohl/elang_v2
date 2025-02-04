@@ -1,0 +1,26 @@
+elang/
+  ├── compiler.py
+  ├── error.py
+  ├── main.py
+  ├── lexer/
+  │   ├── tokens.py           # (already done)
+  │   ├── lexer.py           # (NEW)
+  │   └── test_lexer.py      # (NEW simple test file)
+  ├── parser/
+  │   └── parser.py
+  ├── ast/
+  │   ├── nodes.py
+  │   └── builder.py
+  ├── analysis/
+  │   ├── semantic.py
+  │   └── optimizer/
+  │       ├── const_folding.py
+  │       ├── dead_code.py
+  │       ├── inliner.py
+  │       └── other_passes.py
+  ├── codegen/
+  │   ├── ir.py
+  │   ├── ir_utils.py
+  │   └── codegen.py
+  └── runtime/
+      └── runtime_stub.py
