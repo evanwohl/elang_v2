@@ -1,5 +1,5 @@
 import ply.lex as lex
-from tokens import *
+from .tokens import *
 keyword_map = {
     'async': 'ASYNC',
     'await': 'AWAIT',
@@ -147,8 +147,7 @@ def t_IDENTIFIER(t):
 def t_newline(t):
     r'\n+'
     t.lexer.lineno += len(t.value)
-    t.type = 'NEWLINE'
-    return t
+    pass
 
 def t_comment_singleline(t):
     r'//[^\n]*'
