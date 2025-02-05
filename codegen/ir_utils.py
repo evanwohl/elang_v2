@@ -14,9 +14,8 @@ from ir import (
     StoreInstr, AtomicLoadInstr, AtomicStoreInstr, AcquireLockInstr,
     ReleaseLockInstr, JumpInstr, CJumpInstr, ReturnInstr, CallInstr,
     RequestInstr, SpawnInstr, ThreadForkInstr, ThreadJoinInstr, KillInstr,
-    DetachInstr, SleepInstr, PrintInstr, # existing concurrency
+    DetachInstr, SleepInstr, PrintInstr, ChannelSendInstr,  # existing concurrency
     # The new concurrency instructions we just added
-    ChannelSendInstr, ChannelRecvInstr, WaitAllInstr
 )
 
 
@@ -338,15 +337,6 @@ class DeadCodeEliminationPass:
             if isinstance(i.url, IRTemp): ops.append(i.url)
             if i.headers and isinstance(i.headers, IRTemp): ops.append(i.headers)
             if i.body and isinstance(i.body, IRTemp): ops.append(i.body)
-        elif isinstance(i, ChannelSendInstr):
-            if isinstance(i.channel, IRTemp): ops.append(i.channel)
-            if isinstance(i.val, IRTemp): ops.append(i.val)
-        elif isinstance(i, ChannelRecvInstr):
-            if isinstance(i.channel, IRTemp): ops.append(i.channel)
-        elif isinstance(i, WaitAllInstr):
-            for t in i.tasks:
-                if isinstance(t, IRTemp):
-                    ops.append(t)
         # etc. for concurrency instructions
         return ops
 
