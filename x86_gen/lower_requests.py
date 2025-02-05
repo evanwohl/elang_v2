@@ -7,14 +7,6 @@ from codegen.ir import (
 
 
 class AdvancedRequestsLoweringPass:
-    """
-    Replaces RequestInstr with calls to a runtime function __do_http_request
-    that can handle HTTP/HTTPS, multiple headers, and arbitrary body data.
-    We attempt to parse the method (GET, POST, etc.) and ensure the URL
-    is recognized as HTTP or HTTPS. This is best-effort;
-    real logic (like building URL parser) is left to the library side.
-    """
-
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
             self.run_on_function(fn)
