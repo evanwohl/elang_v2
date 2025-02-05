@@ -110,7 +110,9 @@ def test_semantic_black_box():
                     return "Hi " + name;
                 }
             }
-            var c = new Simple();
+            var c: any = Simple;
+            var x = c.hello("Alice");
+            print x;
             """,
             "Class with a method, partial usage (no real new call in grammar, just a test scenario)",
             False
