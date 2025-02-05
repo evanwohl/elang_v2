@@ -8,7 +8,7 @@ and request-optimizing passes for a "requests-focused, hyper-fast" language.
 
 from typing import List, Dict, Set, Optional
 # We'll assume you have all these from your advanced ir.py
-from ir import (
+from .ir import (
     IRModule, IRFunction, IRBlock, IRType, IRTemp, IRConst, IRGlobalRef,
     IRInstr, PhiInstr, MoveInstr, BinOpInstr, UnOpInstr, LoadInstr,
     StoreInstr, AtomicLoadInstr, AtomicStoreInstr, AcquireLockInstr,

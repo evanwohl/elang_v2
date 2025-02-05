@@ -1,6 +1,6 @@
 import sys
 from typing import Optional, Dict
-from ir import (
+from .ir import (
     IRModule, IRFunction, IRBlock, IRType, IRTemp, IRConst, IRGlobalRef,
     MoveInstr, BinOpInstr, UnOpInstr, LoadInstr, StoreInstr, AtomicLoadInstr,
     AtomicStoreInstr, AcquireLockInstr, ReleaseLockInstr, JumpInstr, CJumpInstr,
@@ -8,7 +8,7 @@ from ir import (
     ThreadJoinInstr, KillInstr, DetachInstr, SleepInstr, PrintInstr,
     CreateDictInstr, DictSetInstr, CreateArrayInstr, ArrayPushInstr
 )
-from ir_utils import IRBuilder
+from .ir_utils import IRBuilder
 from parser.parser import (
     ProgramNode, FunctionNode, ClassNode, VarDeclNode, RequestNode,
     IfNode, WhileNode, ForNode, TryNode, ReturnNode, BreakNode, ContinueNode,

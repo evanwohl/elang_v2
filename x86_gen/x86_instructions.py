@@ -143,55 +143,48 @@ def imm(value: int):
 def mem(base=None, disp=0, index=None, scale=1):
     return X86Operand(X86OperandType.MEM, base, scale, index, disp)
 
+# x86_instructions.py
+from enum import Enum, auto
+
 class X86Op(Enum):
-    # Basic integer ops
-    MOV    = auto()
-    ADD    = auto()
-    SUB    = auto()
-    MUL    = auto()
-    IMUL   = auto()
-    DIV    = auto()
-    IDIV   = auto()
-    INC    = auto()
-    DEC    = auto()
-    XOR    = auto()
-    OR     = auto()
-    AND    = auto()
-    TEST   = auto()
-    CMP    = auto()
-    LEA    = auto()
-
-    # stack ops
-    PUSH   = auto()
-    POP    = auto()
-
-    # jumps/calls
-    CALL   = auto()
-    RET    = auto()
-    JMP    = auto()
-    JE     = auto()
-    JNE    = auto()
-    JG     = auto()
-    JGE    = auto()
-    JL     = auto()
-    JLE    = auto()
-
-    # SSE/AVX ops (for i9 or advanced usage)
-    MOVSS  = auto()  # move scalar single
-    MOVSD  = auto()  # move scalar double
-    MOVUPS = auto()  # move unaligned packed single
-    MOVUPD = auto()  # move unaligned packed double
-
-    ADDSS  = auto()
-    ADDSD  = auto()
-    SUBSS  = auto()
-    SUBSD  = auto()
-    MULSS  = auto()
-    MULSD  = auto()
-    DIVSS  = auto()
-    DIVSD  = auto()
-
-    # AVX versions for packed ops
+    MOV = auto()
+    ADD = auto()
+    SUB = auto()
+    MUL = auto()
+    IMUL = auto()
+    DIV = auto()
+    IDIV = auto()
+    INC = auto()
+    DEC = auto()
+    XOR = auto()
+    OR  = auto()
+    AND = auto()
+    TEST = auto()
+    CMP = auto()
+    LEA = auto()
+    PUSH = auto()
+    POP = auto()
+    CALL = auto()
+    RET = auto()
+    JMP = auto()
+    JE = auto()
+    JNE = auto()
+    JG = auto()
+    JGE = auto()
+    JL = auto()
+    JLE = auto()
+    MOVSS = auto()
+    MOVSD = auto()
+    MOVUPS = auto()
+    MOVUPD = auto()
+    ADDSS = auto()
+    ADDSD = auto()
+    SUBSS = auto()
+    SUBSD = auto()
+    MULSS = auto()
+    MULSD = auto()
+    DIVSS = auto()
+    DIVSD = auto()
     VADDPS = auto()
     VSUBPS = auto()
     VMULPS = auto()
@@ -200,9 +193,8 @@ class X86Op(Enum):
     VSUBPD = auto()
     VMULPD = auto()
     VDIVPD = auto()
-
-    # no operation
-    NOP    = auto()
+    NOP = auto()
+    CDQ = auto()  # add CDQ for sign-extension
 
 class X86Instruction:
     def __init__(self, op: X86Op, operands=None):
