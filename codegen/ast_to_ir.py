@@ -171,6 +171,7 @@ class ASTToIR:
         else:
             pass
 
+
     def create_var_temp(self, name: str, t: str):
         real_ty = self.type_map.get(t, IRType("any"))
         v = self.current_function.create_temp(real_ty)
