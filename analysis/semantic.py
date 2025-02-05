@@ -16,16 +16,23 @@ class SymbolInfo:
         self.name = name
         self.type = t
         self.mutable = mutable
+        self.used = False
+        self.assigned = False
+        self.extra = {}
 
 class Scope:
     def __init__(self, parent=None):
         self.parent = parent
         self.symbols = {}
+        self.is_function_scope = False
 
-    def define(self, name, t, mutable=True):
+    def define(self, name, t, mutable=True, extra=None):
         if name in self.symbols:
-            raise SemanticError("Duplicate symbol " + name)
-        self.symbols[name] = SymbolInfo(name, t, mutable)
+            raise SemanticError("Duplicate symbol in same scope: " + name)
+        s = SymbolInfo(name, t, mutable)
+        if extra:
+            s.extra = extra
+        self.symbols[name] = s
 
     def lookup(self, name):
         if name in self.symbols:
@@ -34,6 +41,11 @@ class Scope:
             return self.parent.lookup(name)
         return None
 
+    def finalize_scope(self):
+        for sym in self.symbols.values():
+            if not sym.used and sym.type != "function" and sym.type != "class" and sym.name != "_":
+                print(f"Warning: Variable '{sym.name}' declared but never used.")
+
 class TypeSystem:
     def __init__(self):
         self.base_types = {"int", "float", "bool", "string", "any", "void"}
@@ -41,12 +53,9 @@ class TypeSystem:
     def check_assignable(self, lhs, rhs):
         if lhs == "any" or rhs == "any":
             return True
-        if lhs == rhs:
-            return True
-        return False
+        return lhs == rhs
 
     def unify_arithmetic(self, left, right):
-        # Allow string + string => string
         if "any" in (left, right):
             return "any"
         if left == "string" and right == "string":
@@ -61,12 +70,14 @@ class SemanticAnalyzer:
     def __init__(self):
         self.type_system = TypeSystem()
         self.current_function_return_type = None
+        self.must_return = False
 
     def analyze(self, ast):
         if not isinstance(ast, ProgramNode):
             raise SemanticError("Top-level must be a ProgramNode")
         scope = Scope()
         self.visit_program(ast, scope)
+        scope.finalize_scope()
 
     def visit_program(self, node, scope):
         for stmt in node.body:
@@ -75,103 +86,129 @@ class SemanticAnalyzer:
     def visit(self, node, scope):
         if isinstance(node, FunctionNode):
             return self.visit_function(node, scope)
-        if isinstance(node, ClassNode):
+        elif isinstance(node, ClassNode):
             return self.visit_class(node, scope)
-        if isinstance(node, VarDeclNode):
+        elif isinstance(node, VarDeclNode):
             return self.visit_var_decl(node, scope)
-        if isinstance(node, RequestNode):
+        elif isinstance(node, RequestNode):
             return self.visit_request(node, scope)
-        if isinstance(node, IfNode):
+        elif isinstance(node, IfNode):
             return self.visit_if(node, scope)
-        if isinstance(node, WhileNode):
+        elif isinstance(node, WhileNode):
             return self.visit_while(node, scope)
-        if isinstance(node, ForNode):
+        elif isinstance(node, ForNode):
             return self.visit_for(node, scope)
-        if isinstance(node, TryNode):
+        elif isinstance(node, TryNode):
             return self.visit_try(node, scope)
-        if isinstance(node, ReturnNode):
+        elif isinstance(node, ReturnNode):
             return self.visit_return(node, scope)
-        if isinstance(node, BreakNode):
+        elif isinstance(node, BreakNode):
             return
-        if isinstance(node, ContinueNode):
+        elif isinstance(node, ContinueNode):
             return
-        if isinstance(node, ThrowNode):
+        elif isinstance(node, ThrowNode):
             return self.visit_throw(node, scope)
-        if isinstance(node, SpawnNode):
+        elif isinstance(node, SpawnNode):
             return self.visit_spawn(node, scope)
-        if isinstance(node, ChannelNode):
+        elif isinstance(node, ChannelNode):
             return self.visit_channel(node, scope)
-        if isinstance(node, ThreadNode):
+        elif isinstance(node, ThreadNode):
             return self.visit_thread(node, scope)
-        if isinstance(node, LockNode):
+        elif isinstance(node, LockNode):
             return
-        if isinstance(node, UnlockNode):
+        elif isinstance(node, UnlockNode):
             return
-        if isinstance(node, SleepNode):
+        elif isinstance(node, SleepNode):
             return self.visit_sleep(node, scope)
-        if isinstance(node, KillNode):
+        elif isinstance(node, KillNode):
             return self.visit_kill(node, scope)
-        if isinstance(node, DetachNode):
+        elif isinstance(node, DetachNode):
             return self.visit_detach(node, scope)
-        if isinstance(node, JoinNode):
+        elif isinstance(node, JoinNode):
             return self.visit_join(node, scope)
-        if isinstance(node, YieldNode):
+        elif isinstance(node, YieldNode):
             return
-        if isinstance(node, AwaitNode):
+        elif isinstance(node, AwaitNode):
             return self.visit_await(node, scope)
-        if isinstance(node, BinaryOpNode):
+        elif isinstance(node, BinaryOpNode):
             return self.visit_binary_op(node, scope)
-        if isinstance(node, UnaryOpNode):
+        elif isinstance(node, UnaryOpNode):
             return self.visit_unary_op(node, scope)
-        if isinstance(node, LiteralNode):
+        elif isinstance(node, LiteralNode):
             return self.visit_literal(node)
-        if isinstance(node, IdentifierNode):
+        elif isinstance(node, IdentifierNode):
             return self.visit_identifier(node, scope)
-        if isinstance(node, AssignNode):
+        elif isinstance(node, AssignNode):
             return self.visit_assign(node, scope)
-        if isinstance(node, BlockNode):
+        elif isinstance(node, BlockNode):
             return self.visit_block(node, scope)
-        if isinstance(node, ExprStmtNode):
+        elif isinstance(node, ExprStmtNode):
             return self.visit_expr_stmt(node, scope)
-        if isinstance(node, DictLiteralNode):
+        elif isinstance(node, DictLiteralNode):
             return self.visit_dict_literal(node, scope)
-        if isinstance(node, ArrayLiteralNode):
+        elif isinstance(node, ArrayLiteralNode):
             return self.visit_array_literal(node, scope)
-        if isinstance(node, PrintStmtNode):
+        elif isinstance(node, PrintStmtNode):
             return self.visit_print_stmt(node, scope)
-        if isinstance(node, CallNode):
+        elif isinstance(node, CallNode):
             return self.visit_call(node, scope)
-        if isinstance(node, MemberAccessNode):
+        elif isinstance(node, MemberAccessNode):
             return self.visit_member_access(node, scope)
-        if isinstance(node, IndexAccessNode):
+        elif isinstance(node, IndexAccessNode):
             return self.visit_index_access(node, scope)
-        if isinstance(node, ArrowFunctionNode):
+        elif isinstance(node, ArrowFunctionNode):
             return self.visit_arrow_function(node, scope)
-        raise SemanticError("Unknown node type: " + str(type(node)))
+        else:
+            raise SemanticError("Unknown node type: " + str(type(node)))
 
     def visit_function(self, node, scope):
-        scope.define(node.name, "function", False)
+        param_types = []
+        for p in node.params:
+            pt = p[1] if p[1] else "any"
+            param_types.append(pt)
+        sig = {"param_types": param_types, "return_type": node.return_type if node.return_type else "void"}
+
+        scope.define(node.name, "function", mutable=False, extra=sig)
         fn_scope = Scope(scope)
+        fn_scope.is_function_scope = True
         old_return = self.current_function_return_type
-        self.current_function_return_type = node.return_type if node.return_type else "void"
+        old_must_return = self.must_return
+
+        self.current_function_return_type = sig["return_type"]
+        self.must_return = (self.current_function_return_type != "void" and self.current_function_return_type != "any")
+
         for p in node.params:
             pt = p[1] if p[1] else "any"
             fn_scope.define(p[0], pt)
+
         self.visit(node.body, fn_scope)
+
+        if self.must_return:
+            print(f"Warning: Not all code paths return in function '{node.name}' which expects {self.current_function_return_type}")
+
         self.current_function_return_type = old_return
+        self.must_return = old_must_return
+
+        fn_scope.finalize_scope()
 
     def visit_class(self, node, scope):
-        scope.define(node.name, "class", False)
+        scope.define(node.name, "class", mutable=False)
         cscope = Scope(scope)
         self.visit(node.body, cscope)
+        cscope.finalize_scope()
 
     def visit_var_decl(self, node, scope):
         t = node.var_type if node.var_type else "any"
+        init_assigned = False
         if node.init_expr:
             rt = self.visit(node.init_expr, scope)
             if not self.type_system.check_assignable(t, rt):
                 raise SemanticError("Cannot assign " + rt + " to " + t)
+            init_assigned = True
         scope.define(node.var_name, t)
+        sym = scope.lookup(node.var_name)
+        if sym and init_assigned:
+            sym.assigned = True
         return t
 
     def visit_request(self, node, scope):
@@ -184,45 +221,56 @@ class SemanticAnalyzer:
 
     def visit_if(self, node, scope):
         self.visit(node.condition, scope)
-        self.visit(node.then_block, scope)
+        then_scope = Scope(scope)
+        self.visit(node.then_block, then_scope)
+        then_scope.finalize_scope()
+
         if node.else_block:
-            self.visit(node.else_block, scope)
+            else_scope = Scope(scope)
+            self.visit(node.else_block, else_scope)
+            else_scope.finalize_scope()
 
     def visit_while(self, node, scope):
         self.visit(node.condition, scope)
-        self.visit(node.body, scope)
+        loop_scope = Scope(scope)
+        self.visit(node.body, loop_scope)
+        loop_scope.finalize_scope()
 
     def visit_for(self, node, scope):
+        for_scope = Scope(scope)
         if node.init:
-            self.visit(node.init, scope)
+            self.visit(node.init, for_scope)
         if node.condition:
-            self.visit(node.condition, scope)
+            self.visit(node.condition, for_scope)
         if node.increment:
-            self.visit(node.increment, scope)
-        self.visit(node.body, scope)
+            self.visit(node.increment, for_scope)
+        self.visit(node.body, for_scope)
+        for_scope.finalize_scope()
 
     def visit_try(self, node, scope):
-        self.visit(node.try_block, scope)
+        try_scope = Scope(scope)
+        self.visit(node.try_block, try_scope)
+        try_scope.finalize_scope()
         if node.catch_var:
             cscope = Scope(scope)
             cscope.define(node.catch_var, "any")
             if node.catch_block:
                 self.visit(node.catch_block, cscope)
+            cscope.finalize_scope()
         if node.finally_block:
-            self.visit(node.finally_block, scope)
+            finally_scope = Scope(scope)
+            self.visit(node.finally_block, finally_scope)
+            finally_scope.finalize_scope()
 
     def visit_return(self, node, scope):
         if node.expr:
             r = self.visit(node.expr, scope)
             if not self.type_system.check_assignable(self.current_function_return_type, r):
-                raise SemanticError(
-                    "Return type mismatch: cannot assign " + r +
-                    " to " + self.current_function_return_type
-                )
-            return r
+                raise SemanticError("Return type mismatch: cannot assign " + r + " to " + self.current_function_return_type)
         else:
             if self.current_function_return_type != "void" and self.current_function_return_type != "any":
                 raise SemanticError("Return type mismatch: function expects " + self.current_function_return_type)
+        self.must_return = False
         return "void"
 
     def visit_throw(self, node, scope):
@@ -232,14 +280,15 @@ class SemanticAnalyzer:
         return self.visit(node.expr, scope)
 
     def visit_channel(self, node, scope):
-        scope.define(node.channel_name, "channel")
+        scope.define(node.channel_name, "channel", mutable=False)
         return "channel"
 
     def visit_thread(self, node, scope):
-        scope.define(node.thread_name, "thread", False)
+        scope.define(node.thread_name, "thread", mutable=False)
         if node.body:
             s = Scope(scope)
             self.visit(node.body, s)
+            s.finalize_scope()
 
     def visit_sleep(self, node, scope):
         self.visit(node.duration_expr, scope)
@@ -269,7 +318,7 @@ class SemanticAnalyzer:
             return self.type_system.unify_arithmetic(l, r)
         if node.op in ["<", ">", "<=", ">=", "==", "!="]:
             return "bool"
-        if node.op == "||" or node.op == "&&":
+        if node.op in ["||", "&&"]:
             if l == "any" or r == "any":
                 return "any"
             if l == "bool" and r == "bool":
@@ -306,10 +355,11 @@ class SemanticAnalyzer:
         return "any"
 
     def visit_identifier(self, node, scope):
-        s = scope.lookup(node.name)
-        if not s:
+        sym = scope.lookup(node.name)
+        if not sym:
             raise SemanticError("Undeclared identifier " + node.name)
-        return s.type
+        sym.used = True
+        return sym.type
 
     def visit_assign(self, node, scope):
         t = self.visit(node.expr, scope)
@@ -319,6 +369,8 @@ class SemanticAnalyzer:
                 raise SemanticError("Undeclared identifier " + node.target.name)
             if not self.type_system.check_assignable(sym.type, t):
                 raise SemanticError("Cannot assign " + t + " to " + sym.type)
+            sym.used = True
+            sym.assigned = True
             return sym.type
         elif isinstance(node.target, IndexAccessNode):
             self.visit(node.target.arr_expr, scope)
@@ -333,6 +385,7 @@ class SemanticAnalyzer:
         s = Scope(scope)
         for st in node.statements:
             self.visit(st, s)
+        s.finalize_scope()
 
     def visit_expr_stmt(self, node, scope):
         return self.visit(node.expr, scope)
@@ -353,10 +406,28 @@ class SemanticAnalyzer:
             self.visit(node.expr, scope)
 
     def visit_call(self, node, scope):
-        c = self.visit(node.callee, scope)
-        for a in node.args:
-            self.visit(a, scope)
-        return "any"
+        ctype = self.visit(node.callee, scope)
+        sym = None
+        if isinstance(node.callee, IdentifierNode):
+            sym = scope.lookup(node.callee.name)
+        if sym and sym.type == "function":
+            sig = sym.extra
+            param_types = sig.get("param_types", [])
+            ret_type = sig.get("return_type", "void")
+
+            if len(node.args) != len(param_types):
+                raise SemanticError(f"Function '{sym.name}' called with wrong number of args")
+
+            for i, arg in enumerate(node.args):
+                arg_type = self.visit(arg, scope)
+                expected = param_types[i]
+                if not self.type_system.check_assignable(expected, arg_type):
+                    raise SemanticError(f"Argument {i+1} to function '{sym.name}' expected {expected}, got {arg_type}")
+            return ret_type
+        else:
+            for a in node.args:
+                self.visit(a, scope)
+            return "any"
 
     def visit_member_access(self, node, scope):
         b = self.visit(node.obj, scope)
@@ -372,12 +443,19 @@ class SemanticAnalyzer:
         for p in node.params:
             s.define(p, "any")
         old_ret = self.current_function_return_type
+        old_must_return = self.must_return
+
         self.current_function_return_type = "any"
+        self.must_return = False
+
         if node.is_block:
             self.visit(node.body, s)
         else:
             self.visit(node.body, s)
+
         self.current_function_return_type = old_ret
+        self.must_return = old_must_return
+        s.finalize_scope()
         return "function"
 
 def analyze_semantics(ast):

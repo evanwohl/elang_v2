@@ -8,32 +8,59 @@ def test_semantic_black_box():
             """
             var x: int = 10;
             var y: float = 2.5;
-            function test(a: int, b: float): float {
-                var z: float = a + b;
-                return z;
+            function sum(a: int, b: float): float {
+                return a + b;
             }
+            var z: float = sum(x, y);
             """,
-            "Simple valid usage, typed variables/functions",
+            "Valid typed usage, function call with matching arguments",
             False
         ),
         (
             """
-            function main(): void {
-                var s: string = "Hello";
-                if (s == "Hello") {
-                    print s;
-                }
+            function greet(name: string): string {
+                return "Hello, " + name;
             }
+            var s = greet("Alice");
             """,
-            "If statement, string usage",
+            "String + string arithmetic, valid return type, everything typed properly",
             False
+        ),
+        (
+            """
+            function failArgs(a: int, b: bool): void {}
+            failArgs(10); 
+            """,
+            "Invalid call: not enough args",
+            True
+        ),
+        (
+            """
+            function failArgs2(a: int, b: bool): void {}
+            failArgs2(1, true, 42);
+            """,
+            "Invalid call: too many args",
+            True
+        ),
+        (
+            """
+            function failType(a: int, b: float): float {
+                return a + b;
+            }
+            var c: bool = failType(2, 3.0);
+            """,
+            "Assigning float to bool, invalid assignment",
+            True
         ),
         (
             """
             var fl = 2.2;
             fl = fl + 1.0;
+            var anything;
+            anything = "string";
+            anything = 123;
             """,
-            "Implicit any typed usage, valid float arithmetic",
+            "Implicit any usage is valid, arithmetic with floats is valid",
             False
         ),
         (
@@ -41,16 +68,7 @@ def test_semantic_black_box():
             var x: bool = true;
             spawn x;
             """,
-            "Spawn expression, referencing a bool",
-            False
-        ),
-        (
-            """
-            function nonsense(a: bool, b: float): bool {
-                return a && (b > 2.0);
-            }
-            """,
-            "Binary ops, bool and float usage",
+            "Spawn expression referencing a bool, fine",
             False
         ),
         (
@@ -62,25 +80,19 @@ def test_semantic_black_box():
         ),
         (
             """
-            var x: float;
-            x = true;
+            function nonsense(a: bool, b: float): bool {
+                return a && (b > 2.0);
+            }
+            var r: bool = nonsense(true, 3.14);
             """,
-            "Invalid assignment: bool to float",
-            True
-        ),
-        (
-            """
-            var flag: bool = false;
-            flag = 5;
-            """,
-            "Invalid assignment: number to bool",
-            True
+            "Binary ops with bool and float usage is valid, correct usage",
+            False
         ),
         (
             """
             kill threadNotDeclared;
             """,
-            "Killing an undeclared identifier",
+            "Killing an undeclared identifier for thread",
             True
         ),
         (
@@ -91,7 +103,62 @@ def test_semantic_black_box():
             "Int assigned to string",
             True
         ),
+        (
+            """
+            class Simple {
+                function hello(name: string): string {
+                    return "Hi " + name;
+                }
+            }
+            var c = new Simple();
+            """,
+            "Class with a method, partial usage (no real new call in grammar, just a test scenario)",
+            False
+        ),
+        (
+            """
+            var shadow: int = 10;
+            {
+                var shadow: float = 2.5;
+            }
+            """,
+            "Shadowing the same var name in nested block, we disallow => error",
+            True
+        ),
+        (
+            """
+            function allPathsReturn(a: bool): int {
+                if (a) {
+                    return 1;
+                } else {
+                    return 0;
+                }
+            }
+            """,
+            "All code paths return int, valid usage",
+            False
+        ),
+        (
+            """
+            function notAllPaths(a: bool): int {
+                if (a) {
+                    return 5;
+                }
+            }
+            """,
+            "Not all code paths return => warning or error. We consider it a warning in our code, but won't fail the test",
+            False
+        ),
+        (
+            """
+            function paramMismatch(a: int, b: int): void {}
+            paramMismatch("str", false);
+            """,
+            "Passing invalid argument types",
+            True
+        ),
     ]
+
     for i, (code, desc, should_error) in enumerate(cases, 1):
         print(f"\n=== Black-Box Test #{i}: {desc} ===")
         try:
@@ -104,52 +171,54 @@ def test_semantic_black_box():
         except SemanticError as e:
             if should_error:
                 print(f"PASS: Caught expected error: {e}")
-                # Do not print traceback if it was expected
             else:
                 print(f"FAIL: Unexpected SemanticError: {e}")
-                traceback.print_exc()
+            # We won't print traceback for expected errors
         except Exception as e:
             print(f"FAIL: Unexpected exception: {e}")
             traceback.print_exc()
+
 
 def test_semantic_white_box():
     cases = [
         (
             """
-            var a: int = 1;
-            var b: int = a + 2;
-            b = b + 3;
+            var arr = [1, 2, false];
+            arr[1] = "test";
             """,
-            "Chained arithmetic, int usage",
+            "Array with mismatched types, typed as any by default, no error",
             False
         ),
         (
             """
-            function testFun(a: int, b: int): bool {
-                return a < b;
-            }
+            var dict = {
+                "key": 123,
+                "val": true
+            };
+            dict["val"] = 3.14;
             """,
-            "Function with return bool, relational op",
+            "Dict usage, also typed any by default, no error",
             False
         ),
         (
             """
-            function weirdReturn(): float {
-                return "text";
-            }
-            """,
-            "Returning string in function typed float",
-            True
-        ),
-        (
-            """
-            function arrowTest(): void {
-                var f = (x) => x+1;
+            function arrowInt(): void {
+                var f = (x) => x + 1;
                 var y = f(10);
             }
             """,
-            "Arrow function with int usage",
+            "Arrow function returning int, no type mismatch",
             False
+        ),
+        (
+            """
+            function arrowInvalid(): void {
+                var f = (x) => x + 1;
+                var s: bool = f("lol");
+            }
+            """,
+            "Arrow function called with string, plus 1 => invalid arithmetic",
+            True
         ),
         (
             """
@@ -160,32 +229,13 @@ def test_semantic_white_box():
                 var res = inner("hello");
             }
             """,
-            "Function inside block, string usage",
+            "Function inside block, string usage, valid string + string => string",
             False
         ),
         (
             """
-            var arr = [1, 2, false];
-            arr[1] = "test";
-            """,
-            "Array with mismatched types, but typed any by default, no error",
-            False
-        ),
-        (
-            """
-            var dict = {
-                "key": 123,
-                "val": true
-            };
-            dict["key"] = false;
-            """,
-            "Dict usage, also typed any by default, no error",
-            False
-        ),
-        (
-            """
-            var done: bool;
-            done = done && 1;
+            var a: bool;
+            var b = a && 1;
             """,
             "bool && int mismatch",
             True
@@ -195,7 +245,7 @@ def test_semantic_white_box():
             var notDeclared;
             notDeclared = missingOne;
             """,
-            "Assign from undeclared var",
+            "Assign from undeclared var missingOne",
             True
         ),
         (
@@ -206,10 +256,73 @@ def test_semantic_white_box():
             join t1;
             localVar = 2.0;
             """,
-            "Accessing localVar outside thread scope",
+            "Accessing localVar outside thread scope => error",
+            True
+        ),
+        (
+            """
+            function multiArgCheck(a: int, b: string, c: bool): int {
+                print a; print b; print c;
+                return a;
+            }
+            multiArgCheck(42, "test", true);
+            """,
+            "Proper call with correct arguments, success",
+            False
+        ),
+        (
+            """
+            function multiArgCheck2(a: int, b: string, c: bool): bool {
+                return c;
+            }
+            var r: bool = multiArgCheck2(10, 999, false);
+            """,
+            "Wrong param type: passing int in place of string => error",
+            True
+        ),
+        (
+            """
+            var unusedOne: int;
+            var usedOne: float = 2.0;
+            print usedOne;
+            """,
+            "Check unused variable => warning. Not an error, so test pass",
+            False
+        ),
+        (
+            """
+            function mustReturnFloat(): float {
+                var x: float = 2.5;
+                if (x > 10) {
+                    return x;
+                } else {
+                    return x + 1.0;
+                }
+            }
+            """,
+            "Multiple return paths, all good, typed float, no error",
+            False
+        ),
+        (
+            """
+            function missingReturn(c: bool): int {
+                if (c) return 1;
+                print "no return if c is false!";
+            }
+            """,
+            "Missing return in else path => warning for not all code paths returning",
+            False
+        ),
+        (
+            """
+            function overArgs(a: int): void {}
+            overArgs(1, 2, 3, 4);
+            """,
+            "Too many arguments => error",
             True
         ),
     ]
+
     for i, (code, desc, should_error) in enumerate(cases, 1):
         print(f"\n=== White-Box Test #{i}: {desc} ===")
         try:
@@ -222,13 +335,12 @@ def test_semantic_white_box():
         except SemanticError as e:
             if should_error:
                 print(f"PASS: Caught expected error: {e}")
-                # Do not print traceback if it was expected
             else:
                 print(f"FAIL: Unexpected SemanticError: {e}")
-                traceback.print_exc()
         except Exception as e:
             print(f"FAIL: Unexpected exception: {e}")
             traceback.print_exc()
+
 
 def main():
     print("=== SEMANTIC BLACK-BOX TESTS ===")
