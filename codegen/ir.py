@@ -1,6 +1,6 @@
 """
-Intermediate Representation (IR) for eLang compiler/codegen.
-We represent each function as a list of IRBlock's (basic blocks).
+Intermediate Representation for eLang compiler/codegen.
+We represent each function as a list of IRBlock's.
 Within blocks, IRInstr objects define operations. We keep concurrency
 and request instructions at this IR level for now.
 """
