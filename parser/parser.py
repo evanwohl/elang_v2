@@ -63,11 +63,8 @@ class ReturnNode(ASTNode):
     def __init__(self, expr):
         self.expr = expr
 
-class BreakNode(ASTNode):
-    pass
-
-class ContinueNode(ASTNode):
-    pass
+class BreakNode(ASTNode): pass
+class ContinueNode(ASTNode): pass
 
 class ThrowNode(ASTNode):
     def __init__(self, expr):
@@ -110,8 +107,7 @@ class JoinNode(ASTNode):
     def __init__(self, thread_name):
         self.thread_name = thread_name
 
-class YieldNode(ASTNode):
-    pass
+class YieldNode(ASTNode): pass
 
 class AwaitNode(ASTNode):
     def __init__(self, expr):
@@ -535,9 +531,9 @@ class Parser:
         n = self.parse_logical_or()
         if self.match('EQUALS'):
             r = self.parse_assignment()
-            if isinstance(n, IdentifierNode):
+            if isinstance(n, IdentifierNode) or isinstance(n, IndexAccessNode) or isinstance(n, MemberAccessNode):
                 return AssignNode(n, r)
-            raise Exception("Left side of assignment is not an identifier")
+            raise Exception("Left side of assignment is not an identifier/index/member")
         return n
 
     def parse_logical_or(self):
@@ -669,7 +665,9 @@ class Parser:
         if self.current and self.current.type == 'NUMBER':
             v = self.current.value
             self.advance()
-            return LiteralNode(v)
+            if isinstance(v, int):
+                return LiteralNode(v)
+            return LiteralNode(float(v))
         if self.current and self.current.type == 'STRING':
             v = self.current.value
             self.advance()
