@@ -1,4 +1,4 @@
-eLang is an open-source ahead-of-time compiler for a custom grammar. The language is designed for simple large scale data collection, manipulation, and analysis. It is a type-safe language with extensive semantic analysis pre-compilation. It compiles eLang code directly into x86_64 machine code packed into a PE stub for 64 bit windows machines. 
+eLang is an open-source ahead-of-time compiler for a custom grammar. The language is designed for simple large-scale data collection, manipulation, and analysis. It is a type-safe language with extensive semantic analysis pre-compilation. It compiles eLang code directly into x86_64 machine code packed into a PE stub for 64 bit windows machines. 
 
 Syntax example:
 
