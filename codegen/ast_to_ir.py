@@ -5,7 +5,8 @@ from ir import (
     MoveInstr, BinOpInstr, UnOpInstr, LoadInstr, StoreInstr, AtomicLoadInstr,
     AtomicStoreInstr, AcquireLockInstr, ReleaseLockInstr, JumpInstr, CJumpInstr,
     ReturnInstr, CallInstr, RequestInstr, SpawnInstr, ThreadForkInstr,
-    ThreadJoinInstr, KillInstr, DetachInstr, SleepInstr, PrintInstr
+    ThreadJoinInstr, KillInstr, DetachInstr, SleepInstr, PrintInstr,
+    CreateDictInstr, DictSetInstr, CreateArrayInstr, ArrayPushInstr
 )
 from ir_utils import IRBuilder
 from parser.parser import (
@@ -89,10 +90,8 @@ class ASTToIR:
         fn.add_block(entry_blk)
         self.set_builder_block(entry_blk)
 
-        # Clear any leftover variable mappings
         self.function_map.clear()
 
-        # Create IR temps for each parameter
         for i, (pname, ptype) in enumerate(node.params):
             real_ty = self.type_map.get(ptype, IRType("any")) if ptype else IRType("any")
             ptemp = fn.create_temp(real_ty)
@@ -100,7 +99,6 @@ class ASTToIR:
 
         self.visit_block(node.body)
 
-        # Ensure there's a ReturnInstr if none present
         if fn.blocks:
             last_blk = fn.blocks[-1]
             if not last_blk.instructions or not isinstance(last_blk.instructions[-1], ReturnInstr):
@@ -110,7 +108,7 @@ class ASTToIR:
         return fn
 
     def visit_class_decl(self, node: ClassNode):
-        pass  # Not generating IR for classes in this minimal approach
+        pass
 
     def visit_block(self, node: BlockNode):
         for stmt in node.statements:
@@ -194,18 +192,15 @@ class ASTToIR:
         end_blk = self.new_block("endif")
 
         self.builder.emit(CJumpInstr(cond_val, then_blk.label, else_blk.label))
-
         self.set_builder_block(then_blk)
         self.visit_statement(node.then_block)
         if not self.ends_with_jump(then_blk):
             self.builder.emit(JumpInstr(end_blk.label))
-
         self.set_builder_block(else_blk)
         if node.else_block:
             self.visit_statement(node.else_block)
         if not self.ends_with_jump(else_blk):
             self.builder.emit(JumpInstr(end_blk.label))
-
         self.set_builder_block(end_blk)
 
     def ends_with_jump(self, blk: IRBlock):
@@ -246,10 +241,10 @@ class ASTToIR:
 
         self.set_builder_block(cond_blk)
         if node.condition:
-            cv = self.visit_expression(node.condition)
+            cval = self.visit_expression(node.condition)
         else:
-            cv = self.builder.ensure_value(True, IRType("bool"))
-        self.builder.emit(CJumpInstr(cv, body_blk.label, end_blk.label))
+            cval = self.builder.ensure_value(True, IRType("bool"))
+        self.builder.emit(CJumpInstr(cval, body_blk.label, end_blk.label))
 
         self.set_builder_block(body_blk)
         self.visit_statement(node.body)
@@ -285,63 +280,53 @@ class ASTToIR:
         self.builder.spawn(expr_val, IRType("thread"))
 
     def visit_channel(self, node: ChannelNode):
-        pass  # no IR for channel creation in this pass
+        pass
 
     def visit_thread(self, node: ThreadNode):
         pass
 
     def visit_lock(self, node: LockNode):
-        lock_temp = self.get_var_temp(node.lock_var)
-        if lock_temp:
-            self.builder.emit(AcquireLockInstr(lock_temp))
+        lv = self.get_var_temp(node.lock_var)
+        if lv:
+            self.builder.emit(AcquireLockInstr(lv))
 
     def visit_unlock(self, node: UnlockNode):
-        lock_temp = self.get_var_temp(node.lock_var)
-        if lock_temp:
-            self.builder.emit(ReleaseLockInstr(lock_temp))
+        lv = self.get_var_temp(node.lock_var)
+        if lv:
+            self.builder.emit(ReleaseLockInstr(lv))
 
     def visit_sleep(self, node: SleepNode):
         dur = self.visit_expression(node.duration_expr)
         self.builder.emit(SleepInstr(dur))
 
     def visit_kill(self, node: KillNode):
-        thr = self.get_var_temp(node.thread_name)
-        if thr:
-            self.builder.emit(KillInstr(thr))
+        thrv = self.get_var_temp(node.thread_name)
+        if thrv:
+            self.builder.emit(KillInstr(thrv))
 
     def visit_detach(self, node: DetachNode):
-        thr = self.get_var_temp(node.thread_name)
-        if thr:
-            self.builder.emit(DetachInstr(thr))
+        thrv = self.get_var_temp(node.thread_name)
+        if thrv:
+            self.builder.emit(DetachInstr(thrv))
 
     def visit_join(self, node: JoinNode):
-        thr = self.get_var_temp(node.thread_name)
-        if thr:
-            self.builder.emit(ThreadJoinInstr(thr))
+        thrv = self.get_var_temp(node.thread_name)
+        if thrv:
+            self.builder.emit(ThreadJoinInstr(thrv))
 
     def visit_await(self, node: AwaitNode):
         self.visit_expression(node.expr)
 
     def visit_request_stmt(self, node: RequestNode):
         method = node.method
-        url_val = self.visit_expression(node.url_expr)
-        hdr_val = None
+        url = self.visit_expression(node.url_expr)
+        h = None
         if node.headers:
-            hdr_val = self.ensure_stored_literal(node.headers)
-        body_val = None
+            h = self.visit_expression(node.headers)
+        b = None
         if node.body_expr:
-            body_val = self.ensure_stored_literal(node.body_expr)
-        self.builder.request(method, url_val, hdr_val, body_val, IRType("any"))
-
-    def ensure_stored_literal(self, literal_node):
-        # If it's dict/array, produce a separate temp for it
-        # so IR shows HEADERS=%h etc. rather than inline
-        val = self.visit_expression(literal_node)
-        if isinstance(val, IRConst):
-            tmp = self.current_function.create_temp(IRType("any"))
-            self.builder.move(tmp, val, IRType("any"))
-            return tmp
-        return val
+            b = self.visit_expression(node.body_expr)
+        self.builder.request(method, url, h, b, IRType("any"))
 
     def visit_print(self, node: PrintStmtNode):
         val = self.visit_expression(node.expr)
@@ -350,55 +335,74 @@ class ASTToIR:
     def visit_expression(self, node):
         tname = node.__class__.__name__
         if tname == "BinaryOpNode":
-            l = self.visit_expression(node.left)
-            r = self.visit_expression(node.right)
-            return self.builder.binop(node.op, l, r, IRType("any"))
+            left = self.visit_expression(node.left)
+            right = self.visit_expression(node.right)
+            return self.builder.binop(node.op, left, right, IRType("any"))
         elif tname == "UnaryOpNode":
             sub = self.visit_expression(node.expr)
             return self.builder.unop(node.op, sub, IRType("any"))
         elif tname == "LiteralNode":
             return IRConst(node.value, self.map_literal_type(node.value))
         elif tname == "IdentifierNode":
-            found = self.get_var_temp(node.name)
-            if found:
-                return found
+            vtemp = self.get_var_temp(node.name)
+            if vtemp:
+                return vtemp
             return IRConst(None, IRType("any"))
         elif tname == "CallNode":
             c = self.visit_expression(node.callee)
-            arg_list = []
+            args = []
             for a in node.args:
-                arg_list.append(self.visit_expression(a))
-            return self.builder.call(c, arg_list, IRType("any"))
+                args.append(self.visit_expression(a))
+            return self.builder.call(c, args, IRType("any"))
         elif tname == "MemberAccessNode":
             base = self.visit_expression(node.obj)
             return base
         elif tname == "IndexAccessNode":
-            arrv = self.visit_expression(node.arr_expr)
-            idxv = self.visit_expression(node.index_expr)
-            return arrv
+            arr = self.visit_expression(node.arr_expr)
+            idx = self.visit_expression(node.index_expr)
+            return arr
         elif tname == "AssignNode":
             return self.visit_assign_expr(node)
         elif tname == "ArrowFunctionNode":
-            arrow_name = f"arrow_{len(node.params)}"
-            return IRConst(arrow_name, IRType("function"))
+            arrow_lab = f"arrow_{len(node.params)}"
+            return IRConst(arrow_lab, IRType("function"))
         elif tname == "SpawnNode":
-            sp = self.visit_expression(node.expr)
-            return self.builder.spawn(sp, IRType("thread"))
+            subexpr = self.visit_expression(node.expr)
+            return self.builder.spawn(subexpr, IRType("thread"))
         elif tname == "AwaitNode":
-            ev = self.visit_expression(node.expr)
-            return ev
+            subexpr = self.visit_expression(node.expr)
+            return subexpr
         elif tname == "RequestNode":
-            m = node.method
-            u = self.visit_expression(node.url_expr)
-            h = self.ensure_stored_literal(node.headers) if node.headers else None
-            b = self.ensure_stored_literal(node.body_expr) if node.body_expr else None
-            return self.builder.request(m, u, h, b, IRType("any"))
+            meth = node.method
+            url = self.visit_expression(node.url_expr)
+            hdr = self.visit_expression(node.headers) if node.headers else None
+            bod = self.visit_expression(node.body_expr) if node.body_expr else None
+            return self.builder.request(meth, url, hdr, bod, IRType("any"))
         elif tname == "DictLiteralNode":
-            return IRConst("dict_lit", IRType("any"))
+            return self.build_dict_literal(node)
         elif tname == "ArrayLiteralNode":
-            return IRConst("array_lit", IRType("any"))
+            return self.build_array_literal(node)
         else:
             return IRConst("unknown_expr", IRType("any"))
+
+    def build_dict_literal(self, node: DictLiteralNode):
+        # 1) Create a dict
+        dtemp = self.current_function.create_temp(IRType("any"))
+        self.builder.emit(CreateDictInstr(dtemp))
+        # 2) For each (key_expr, val_expr), do:
+        for (knode, vnode) in node.pairs:
+            kval = self.visit_expression(knode)
+            vval = self.visit_expression(vnode)
+            self.builder.emit(DictSetInstr(dtemp, kval, vval))
+        return dtemp
+
+    def build_array_literal(self, node: ArrayLiteralNode):
+        arrtemp = self.current_function.create_temp(IRType("any"))
+        self.builder.emit(CreateArrayInstr(arrtemp))
+        for elem in node.elements:
+            e = self.visit_expression(elem)
+            self.builder.emit(ArrayPushInstr(arrtemp, e))
+        return arrtemp
 
     def visit_assign_expr(self, node: AssignNode):
         val = self.visit_expression(node.expr)
@@ -411,10 +415,12 @@ class ASTToIR:
         elif isinstance(node.target, IndexAccessNode):
             self.visit_expression(node.target.arr_expr)
             self.visit_expression(node.target.index_expr)
-            return IRConst(None, IRType("any"))  # ignoring store
+            # naive ignoring store
+            return IRConst(None, IRType("any"))
         elif isinstance(node.target, MemberAccessNode):
             self.visit_expression(node.target.obj)
-            return IRConst(None, IRType("any"))  # ignoring store
+            # naive ignoring store
+            return IRConst(None, IRType("any"))
         return IRConst(None, IRType("any"))
 
     def map_literal_type(self, v):

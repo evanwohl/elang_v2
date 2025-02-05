@@ -288,3 +288,29 @@ class WaitAllInstr(IRInstr):
     def __repr__(self):
         s = ", ".join(repr(x) for x in self.tasks)
         return f"WAIT_ALL [{s}]"
+class CreateDictInstr(IRInstr):
+    def __init__(self, dest):
+        self.dest = dest
+    def __repr__(self):
+        return f"{self.dest} = CREATE_DICT"
+
+class DictSetInstr(IRInstr):
+    def __init__(self, dict_temp, key_temp, val_temp):
+        self.dict_temp = dict_temp
+        self.key_temp = key_temp
+        self.val_temp = val_temp
+    def __repr__(self):
+        return f"DICT_SET {self.dict_temp}, {self.key_temp}, {self.val_temp}"
+
+class CreateArrayInstr(IRInstr):
+    def __init__(self, dest):
+        self.dest = dest
+    def __repr__(self):
+        return f"{self.dest} = CREATE_ARRAY"
+
+class ArrayPushInstr(IRInstr):
+    def __init__(self, arr_temp, val_temp):
+        self.arr_temp = arr_temp
+        self.val_temp = val_temp
+    def __repr__(self):
+        return f"ARRAY_PUSH {self.arr_temp}, {self.val_temp}"

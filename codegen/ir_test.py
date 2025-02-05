@@ -135,7 +135,7 @@ def test_ir_white_box():
         (
             """
             function requestWithHeaders(): any {
-                var r = post "https://api.test" HEADERS {"X-Check": "yes"} BODY {"data":123};
+                var r = post "https://api.test" HEADERS {"X-Check": "yes", "test": "test"} BODY {"data":123};
                 return r;
             }
             var resp = requestWithHeaders();
