@@ -23,15 +23,21 @@ class X86Codegen:
         self.string_literals = {}
         self.string_count = 0
 
-        self.int_arg_regs = [X86Register.RDI, X86Register.RSI, X86Register.RDX,
-                             X86Register.RCX, X86Register.R8,  X86Register.R9]
-        self.float_arg_regs = [X86Register.XMM0, X86Register.XMM1, X86Register.XMM2,
-                               X86Register.XMM3, X86Register.XMM4, X86Register.XMM5,
-                               X86Register.XMM6, X86Register.XMM7]
+        # We'll assume a calling convention with up to 6 integer/pointer regs,
+        # and up to 8 float regs. If more, we push them on stack in reverse order.
+        self.int_arg_regs = [
+            X86Register.RDI, X86Register.RSI, X86Register.RDX,
+            X86Register.RCX, X86Register.R8, X86Register.R9
+        ]
+        self.float_arg_regs = [
+            X86Register.XMM0, X86Register.XMM1, X86Register.XMM2, X86Register.XMM3,
+            X86Register.XMM4, X86Register.XMM5, X86Register.XMM6, X86Register.XMM7
+        ]
 
     def run_on_module(self, module: IRModule):
         if X86Section.DATA not in self.asm.sections:
             self.asm.sections[X86Section.DATA] = []
+        # Codegen each function
         for fn in module.functions:
             self.run_on_function(fn)
         return str(self.asm)
@@ -40,6 +46,7 @@ class X86Codegen:
         fn_label = fn.name
         self.asm.add_label(X86Section.TEXT, X86Label(fn_label))
 
+        # prologue
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.PUSH, [reg(X86Register.RBP)]))
         self.asm.add_instruction(X86Section.TEXT,
@@ -49,16 +56,20 @@ class X86Codegen:
         self.current_stack_offset = 0
         self.temp_locs.clear()
 
+        # reserve local space
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.SUB, [reg(X86Register.RSP), imm(local_size)]))
 
+        # output basic blocks
         for block in fn.blocks:
-            blk_label = f"{fn_label}_{block.label}"
-            self.asm.add_label(X86Section.TEXT, X86Label(blk_label))
+            block_lbl = f"{fn_label}_{block.label}"
+            self.asm.add_label(X86Section.TEXT, X86Label(block_lbl))
             self.run_on_block(fn, block)
 
-        ep = f"{fn_label}_epilogue"
-        self.asm.add_label(X86Section.TEXT, X86Label(ep))
+        # function epilogue
+        ep_label = f"{fn_label}_epilogue"
+        self.asm.add_label(X86Section.TEXT, X86Label(ep_label))
+
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.MOV, [reg(X86Register.RSP), reg(X86Register.RBP)]))
         self.asm.add_instruction(X86Section.TEXT,
@@ -110,118 +121,168 @@ class X86Codegen:
             elif isinstance(instr, ArrayPushInstr):
                 self.lower_array_push(instr)
             else:
-                # Possibly warn or ignore
+                # Possibly log an unhandled instruction
                 pass
 
     def lower_move(self, instr: MoveInstr):
-        s_op = self.get_operand_for_value(instr.src)
-        d_op = self.get_operand_for_temp(instr.dest)
+        src_op = self.get_operand_for_value(instr.src)
+        dst_op = self.get_operand_for_temp(instr.dest)
         self.asm.add_instruction(X86Section.TEXT,
-            X86Instruction(X86Op.MOV, [d_op, s_op]))
+            X86Instruction(X86Op.MOV, [dst_op, src_op]))
 
     def lower_binop(self, instr: BinOpInstr):
-        l_op = self.get_operand_for_value(instr.left)
-        r_op = self.get_operand_for_value(instr.right)
+        left_op = self.get_operand_for_value(instr.left)
+        right_op = self.get_operand_for_value(instr.right)
         is_float = (instr.left.ty.name in ("float","double") or
                     instr.right.ty.name in ("float","double"))
+        dst_op = self.get_operand_for_temp(instr.dest)
 
         if not is_float:
             self.asm.add_instruction(X86Section.TEXT,
-                X86Instruction(X86Op.MOV, [reg(X86Register.RAX), l_op]))
+                X86Instruction(X86Op.MOV, [reg(X86Register.RAX), left_op]))
             if instr.op=="+":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.ADD, [reg(X86Register.RAX), r_op]))
+                    X86Instruction(X86Op.ADD, [reg(X86Register.RAX), right_op]))
             elif instr.op=="-":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.SUB, [reg(X86Register.RAX), r_op]))
+                    X86Instruction(X86Op.SUB, [reg(X86Register.RAX), right_op]))
             elif instr.op=="*":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.IMUL, [reg(X86Register.RAX), r_op]))
+                    X86Instruction(X86Op.IMUL, [reg(X86Register.RAX), right_op]))
             elif instr.op=="/":
+                # sign extend rax into rdx
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.CDQ))
+                    X86Instruction(X86Op.CDQ, []))
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.IDIV, [r_op]))
-            dst_op = self.get_operand_for_temp(instr.dest)
+                    X86Instruction(X86Op.IDIV, [right_op]))
+            elif instr.op=="%":
+                # example: do the IDIV => remainder is in rdx
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.CDQ, []))
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.IDIV, [right_op]))
+                # store remainder from RDX
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.MOV, [dst_op, reg(X86Register.RDX)]))
+                return
             self.asm.add_instruction(X86Section.TEXT,
                 X86Instruction(X86Op.MOV, [dst_op, reg(X86Register.RAX)]))
         else:
+            # float path
             self.asm.add_instruction(X86Section.TEXT,
-                X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), l_op]))
+                X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), left_op]))
             if instr.op=="+":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.ADDSD, [reg(X86Register.XMM0), r_op]))
+                    X86Instruction(X86Op.ADDSD, [reg(X86Register.XMM0), right_op]))
             elif instr.op=="-":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.SUBSD, [reg(X86Register.XMM0), r_op]))
+                    X86Instruction(X86Op.SUBSD, [reg(X86Register.XMM0), right_op]))
             elif instr.op=="*":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.MULSD, [reg(X86Register.XMM0), r_op]))
+                    X86Instruction(X86Op.MULSD, [reg(X86Register.XMM0), right_op]))
             elif instr.op=="/":
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.DIVSD, [reg(X86Register.XMM0), r_op]))
-            dst_op = self.get_operand_for_temp(instr.dest)
+                    X86Instruction(X86Op.DIVSD, [reg(X86Register.XMM0), right_op]))
+            # store to dest
             self.asm.add_instruction(X86Section.TEXT,
                 X86Instruction(X86Op.MOVSD, [dst_op, reg(X86Register.XMM0)]))
 
     def lower_unop(self, instr: UnOpInstr):
         s_op = self.get_operand_for_value(instr.src)
         d_op = self.get_operand_for_temp(instr.dest)
-        self.asm.add_instruction(X86Section.TEXT,
-            X86Instruction(X86Op.MOV, [reg(X86Register.RAX), s_op]))
-        if instr.op=="-":
+        # if float => use XMM. if int => RAX.
+        is_float = (instr.src.ty.name in ("float","double"))
+        if not is_float:
             self.asm.add_instruction(X86Section.TEXT,
-                X86Instruction(X86Op.NEG, [reg(X86Register.RAX)]))
-        elif instr.op=="!":
-            # minimal approach: compare rax with 0, set if zero => 1 else 0
-            # or invert. Let's do: cmp rax,0 => sete al => movzx rax,al => xor rax,1
-            # etc. We'll do a simpler approach for demonstration, not perfect
-            pass
-        self.asm.add_instruction(X86Section.TEXT,
-            X86Instruction(X86Op.MOV, [d_op, reg(X86Register.RAX)]))
+                X86Instruction(X86Op.MOV, [reg(X86Register.RAX), s_op]))
+            if instr.op=="-":
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.NEG, [reg(X86Register.RAX)]))
+            elif instr.op=="+":
+                # do nothing
+                pass
+            elif instr.op=="!":
+                # naive approach => compare with 0 => set==0 => ...
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.CMP, [reg(X86Register.RAX), imm(0)]))
+                # set E = (rax==0)
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.SETE, ["al"]))
+                # zero-extend al => rax
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.MOVZX, [reg(X86Register.RAX), "al"]))
+            self.asm.add_instruction(X86Section.TEXT,
+                X86Instruction(X86Op.MOV, [d_op, reg(X86Register.RAX)]))
+        else:
+            self.asm.add_instruction(X86Section.TEXT,
+                X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), s_op]))
+            if instr.op=="-":
+                # flip sign => XORPS with sign mask, or simpler: movsd XMM1, -0.0 then SUB
+                # we'll do an easier approach: sub from zero
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.XORPS, [reg(X86Register.XMM1), reg(X86Register.XMM1)]))
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.SUBSD, [reg(X86Register.XMM1), reg(X86Register.XMM0)]))
+                self.asm.add_instruction(X86Section.TEXT,
+                    X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), reg(X86Register.XMM1)]))
+            elif instr.op=="+":
+                pass
+            elif instr.op=="!":
+                # not well-defined for float => we won't handle
+                pass
+            self.asm.add_instruction(X86Section.TEXT,
+                X86Instruction(X86Op.MOVSD, [d_op, reg(X86Register.XMM0)]))
 
     def lower_call(self, instr: CallInstr):
-        int_used   = 0
-        float_used = 0
-        stack_args = []
-        # backward for stack
+        # 1) gather args into stack or registers
+        int_used=0
+        float_used=0
+        stack_args=[]
+        # we will store them in reverse order for stack
         for arg in reversed(instr.args):
             if arg.ty.name in ("float","double"):
                 if float_used<8:
-                    float_used += 1
+                    float_used+=1
                 else:
                     stack_args.append(arg)
             else:
                 if int_used<6:
-                    int_used += 1
+                    int_used+=1
                 else:
                     stack_args.append(arg)
         for a in stack_args:
             a_op = self.get_operand_for_value(a)
             self.asm.add_instruction(X86Section.TEXT,
                 X86Instruction(X86Op.PUSH, [a_op]))
-        int_i   = 0
-        float_i = 0
+
+        # now pass regs
+        used_i = 0
+        used_f = 0
         for arg in instr.args:
             a_op = self.get_operand_for_value(arg)
             if arg.ty.name in ("float","double"):
-                if float_i<8:
+                if used_f<8:
                     self.asm.add_instruction(X86Section.TEXT,
-                        X86Instruction(X86Op.MOVSD, [reg(self.float_arg_regs[float_i]), a_op]))
-                    float_i+=1
+                        X86Instruction(X86Op.MOVSD, [reg(self.float_arg_regs[used_f]), a_op]))
+                    used_f+=1
             else:
-                if int_i<6:
+                if used_i<6:
                     self.asm.add_instruction(X86Section.TEXT,
-                        X86Instruction(X86Op.MOV, [reg(self.int_arg_regs[int_i]), a_op]))
-                    int_i+=1
+                        X86Instruction(X86Op.MOV, [reg(self.int_arg_regs[used_i]), a_op]))
+                    used_i+=1
+
+        # 2) call
         f_op = self.get_operand_for_value(instr.func)
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.CALL, [f_op]))
 
-        stack_sz = 8*len(stack_args)
-        if stack_sz>0:
+        # 3) cleanup stack
+        if stack_args:
+            cleanup_size= 8*len(stack_args)
             self.asm.add_instruction(X86Section.TEXT,
-                X86Instruction(X86Op.ADD, [reg(X86Register.RSP), imm(stack_sz)]))
+                X86Instruction(X86Op.ADD, [reg(X86Register.RSP), imm(cleanup_size)]))
+
+        # 4) store ret in dest if any
         if instr.dest:
             d_op = self.get_operand_for_temp(instr.dest)
             if instr.dest.ty.name in ("float","double"):
@@ -232,124 +293,115 @@ class X86Codegen:
                     X86Instruction(X86Op.MOV, [d_op, reg(X86Register.RAX)]))
 
     def lower_print(self, instr: PrintInstr):
-        c = CallInstr(
-            dest=None,
-            func=IRConst("__lang_print", IRType("function")),
-            args=[instr.val]
-        )
-        self.lower_call(c)
+        # pass the value in %rdi
+        # call __lang_print
+        # The value to print is presumably a pointer or an int
+        val_op = self.get_operand_for_value(instr.val)
+        # move into rdi
+        self.asm.add_instruction(X86Section.TEXT,
+            X86Instruction(X86Op.MOV, [reg(X86Register.RDI), val_op]))
+        self.asm.add_instruction(X86Section.TEXT,
+            X86Instruction(X86Op.CALL, ["__lang_print"]))
 
     def lower_return(self, instr: ReturnInstr, fn: IRFunction):
         if instr.value:
-            val_op = self.get_operand_for_value(instr.value)
+            v_op = self.get_operand_for_value(instr.value)
             if instr.value.ty.name in ("float","double"):
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), val_op]))
+                    X86Instruction(X86Op.MOVSD, [reg(X86Register.XMM0), v_op]))
             else:
                 self.asm.add_instruction(X86Section.TEXT,
-                    X86Instruction(X86Op.MOV, [reg(X86Register.RAX), val_op]))
+                    X86Instruction(X86Op.MOV, [reg(X86Register.RAX), v_op]))
         ep = f"{fn.name}_epilogue"
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.JMP, [ep]))
 
     def lower_cjump(self, instr: CJumpInstr, fn: IRFunction):
-        c_op = self.get_operand_for_value(instr.cond)
+        cond_op = self.get_operand_for_value(instr.cond)
+        # compare cond_op,0 => jne => true => jmp => false
         self.asm.add_instruction(X86Section.TEXT,
-            X86Instruction(X86Op.CMP, [c_op, imm(0)]))
+            X86Instruction(X86Op.CMP, [cond_op, imm(0)]))
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.JNE, [self.label_operand(fn, instr.true_label)]))
         self.asm.add_instruction(X86Section.TEXT,
             X86Instruction(X86Op.JMP, [self.label_operand(fn, instr.false_label)]))
 
     def lower_spawn(self, s: SpawnInstr):
-        # naive
-        if s.dest:
-            tid = s.dest
-        else:
-            tid = None
-        spawn_func = s.spawnVal
-        if isinstance(spawn_func, IRConst) and spawn_func.ty.name=="function":
-            pass
-        else:
-            spawn_func = IRConst("__unknown_function", IRType("function"))
+        # naive: call pthread_create(..., s.spawnVal, ...)
+        # ignoring the real details
+        # if s.dest => store thread handle
         c = CallInstr(
-            dest=tid,
+            dest=s.dest,
             func=IRConst("pthread_create", IRType("function")),
-            args=[
-                IRConst(None, IRType("any")),
-                IRConst(0, IRType("any")),
-                spawn_func,
-                IRConst(0, IRType("any"))
-            ]
+            args=[IRConst(None, IRType("any")),
+                  IRConst(0, IRType("any")),
+                  s.spawnVal,
+                  IRConst(0, IRType("any"))]
         )
         self.lower_call(c)
 
-    def lower_acquire_lock(self, i: AcquireLockInstr):
+    def lower_acquire_lock(self, a: AcquireLockInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("pthread_mutex_lock", IRType("function")),
-            args=[i.lockVal]
+            args=[a.lockVal]
         )
         self.lower_call(c)
 
-    def lower_release_lock(self, i: ReleaseLockInstr):
+    def lower_release_lock(self, r: ReleaseLockInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("pthread_mutex_unlock", IRType("function")),
-            args=[i.lockVal]
+            args=[r.lockVal]
         )
         self.lower_call(c)
 
-    def lower_join(self, i: ThreadJoinInstr):
+    def lower_join(self, j: ThreadJoinInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("pthread_join", IRType("function")),
-            args=[i.threadVal, IRConst(0, IRType("any"))]
+            args=[j.threadVal, IRConst(0, IRType("any"))]
         )
         self.lower_call(c)
 
-    def lower_kill(self, i: KillInstr):
+    def lower_kill(self, k: KillInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("pthread_cancel", IRType("function")),
-            args=[i.threadVal]
+            args=[k.threadVal]
         )
         self.lower_call(c)
 
-    def lower_detach(self, i: DetachInstr):
+    def lower_detach(self, d: DetachInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("pthread_detach", IRType("function")),
-            args=[i.threadVal]
+            args=[d.threadVal]
         )
         self.lower_call(c)
 
-    def lower_sleep(self, i: SleepInstr):
+    def lower_sleep(self, s: SleepInstr):
         c = CallInstr(
             dest=None,
             func=IRConst("sleep", IRType("function")),
-            args=[i.durationVal]
+            args=[s.durationVal]
         )
         self.lower_call(c)
 
     def lower_request(self, r: RequestInstr):
-        # We'll call __do_http_request(method, url, headers, body)
-        # ensure method, url, headers, body exist
-        method_val = (IRConst(r.method, IRType("string"))
-                      if r.method else IRConst(None, IRType("any")))
+        # We do call __do_http_request(method, url, headers, body)
+        method_val = IRConst(r.method, IRType("string")) if r.method else IRConst(None, IRType("any"))
         url_val = r.url if r.url else IRConst(None, IRType("any"))
         hdr_val = r.headers if r.headers else IRConst(None, IRType("any"))
-        bdy_val = r.body if r.body else IRConst(None, IRType("any"))
+        body_val= r.body if r.body else IRConst(None, IRType("any"))
         c = CallInstr(
             dest=r.dest,
             func=IRConst("__do_http_request", IRType("function")),
-            args=[method_val, url_val, hdr_val, bdy_val]
+            args=[method_val, url_val, hdr_val, body_val]
         )
         self.lower_call(c)
 
     def lower_create_dict(self, cd: CreateDictInstr):
-        # call __create_dict => returns pointer in RAX
-        # store into cd.dest
         c = CallInstr(
             dest=cd.dest,
             func=IRConst("__create_dict", IRType("function")),
@@ -358,7 +410,6 @@ class X86Codegen:
         self.lower_call(c)
 
     def lower_dict_set(self, ds: DictSetInstr):
-        # call __dict_set(dict_temp, key_temp, val_temp)
         c = CallInstr(
             dest=None,
             func=IRConst("__dict_set", IRType("function")),
@@ -382,6 +433,7 @@ class X86Codegen:
         )
         self.lower_call(c)
 
+    # ---------- utility
     def get_operand_for_value(self, val):
         if isinstance(val, IRConst):
             if val.ty.name=="function":
@@ -389,16 +441,17 @@ class X86Codegen:
                     return self.make_label_operand("__unknown_function")
                 return self.make_label_operand(str(val.value))
             if val.ty.name=="string":
-                label = self.get_string_label(val.value)
-                return label
+                lbl = self.get_string_label(val.value)
+                return self.make_label_operand(lbl)
             if isinstance(val.value, int):
                 return imm(val.value)
             if val.value is None:
                 return imm(0)
-            # fallback
+            # fallback => imm(0)
             return imm(0)
         elif isinstance(val, IRTemp):
             return self.get_operand_for_temp(val)
+        # fallback
         return imm(0)
 
     def get_operand_for_temp(self, t: IRTemp):
@@ -409,21 +462,11 @@ class X86Codegen:
         off = self.temp_locs[t]
         return mem(X86Register.RBP, disp=off)
 
-    def get_string_label(self, s: str):
-        if s not in self.string_literals:
-            label_name = f".LC{self.string_count}"
-            self.string_count += 1
-            self.string_literals[s] = label_name
-            escaped = s.replace('"','\\"')
-            self.asm.sections[X86Section.DATA].append(
-                f"{label_name}:\n  .asciz \"{escaped}\""
-            )
-        return self.string_literals[s]
-
-    def label_operand(self, fn: IRFunction, lab: str):
-        if lab.startswith(fn.name+"_"):
-            return lab
-        return f"{fn.name}_{lab}"
+    def label_operand(self, fn: IRFunction, label: str):
+        # if label is already prefixed => return
+        if label.startswith(fn.name+"_"):
+            return label
+        return f"{fn.name}_{label}"
 
     def make_label_operand(self, lbl: str):
         class LabelOp:
@@ -432,3 +475,15 @@ class X86Codegen:
             def __repr__(self):
                 return self.label
         return LabelOp(lbl)
+
+    def get_string_label(self, s: str):
+        if s not in self.string_literals:
+            lbl = f".LC{self.string_count}"
+            self.string_count += 1
+            # naive escaping
+            escaped = s.replace('"','\\"').replace("\n","\\n")
+            self.string_literals[s] = lbl
+            self.asm.sections[X86Section.DATA].append(
+                f"{lbl}:\n  .asciz \"{escaped}\""
+            )
+        return self.string_literals[s]
