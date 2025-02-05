@@ -156,6 +156,10 @@ def test_ir_white_box():
                 }
             }
             tryCatchFinally();
+            var r: int = 172;
+            while(r > 0) {
+                r = r - 1;
+            }
             """,
             "5) try/catch/finally usage"
         )
