@@ -27,23 +27,32 @@ class Scope:
         self.is_function_scope = False
 
     def define(self, name, t, mutable=True, extra=None):
-        if name in self.symbols:
-            raise SemanticError("Duplicate symbol in same scope: " + name)
+        if self.lookup_local_or_ancestors(name) is not None:
+            raise SemanticError("Duplicate symbol (shadowing not allowed): " + name)
         s = SymbolInfo(name, t, mutable)
         if extra:
             s.extra = extra
         self.symbols[name] = s
 
+    def lookup_local_or_ancestors(self, name):
+        s = self.symbols.get(name)
+        if s:
+            return s
+        if self.parent:
+            return self.parent.lookup_local_or_ancestors(name)
+        return None
+
     def lookup(self, name):
-        if name in self.symbols:
-            return self.symbols[name]
+        s = self.symbols.get(name)
+        if s:
+            return s
         if self.parent:
             return self.parent.lookup(name)
         return None
 
     def finalize_scope(self):
         for sym in self.symbols.values():
-            if not sym.used and sym.type != "function" and sym.type != "class" and sym.name != "_":
+            if not sym.used and sym.type not in ("function", "class") and sym.name != "_":
                 print(f"Warning: Variable '{sym.name}' declared but never used.")
 
 class TypeSystem:
@@ -56,8 +65,12 @@ class TypeSystem:
         return lhs == rhs
 
     def unify_arithmetic(self, left, right):
-        if "any" in (left, right):
+        if left == "any" and right == "any":
             return "any"
+        if left == "any":
+            left = right
+        elif right == "any":
+            right = left
         if left == "string" and right == "string":
             return "string"
         if left in ["int","float"] and right in ["int","float"]:
@@ -175,14 +188,13 @@ class SemanticAnalyzer:
         old_must_return = self.must_return
 
         self.current_function_return_type = sig["return_type"]
-        self.must_return = (self.current_function_return_type != "void" and self.current_function_return_type != "any")
+        self.must_return = (self.current_function_return_type not in ("void","any"))
 
         for p in node.params:
             pt = p[1] if p[1] else "any"
             fn_scope.define(p[0], pt)
 
         self.visit(node.body, fn_scope)
-
         if self.must_return:
             print(f"Warning: Not all code paths return in function '{node.name}' which expects {self.current_function_return_type}")
 
@@ -198,18 +210,30 @@ class SemanticAnalyzer:
         cscope.finalize_scope()
 
     def visit_var_decl(self, node, scope):
-        t = node.var_type if node.var_type else "any"
-        init_assigned = False
+        # see if there's a declared type
+        declared_type = node.var_type if node.var_type else "any"
+        init_type = None
         if node.init_expr:
-            rt = self.visit(node.init_expr, scope)
-            if not self.type_system.check_assignable(t, rt):
-                raise SemanticError("Cannot assign " + rt + " to " + t)
-            init_assigned = True
-        scope.define(node.var_name, t)
-        sym = scope.lookup(node.var_name)
-        if sym and init_assigned:
-            sym.assigned = True
-        return t
+            init_type = self.visit(node.init_expr, scope)
+            # if arrow function => might be ("function", signature)
+            if isinstance(init_type, tuple) and init_type[0] == "function":
+                # assign the variable a "function" type
+                scope.define(node.var_name, "function")
+                sym = scope.lookup(node.var_name)
+                sym.extra = init_type[1]  # store param_types, return_type
+                sym.used = False
+                sym.assigned = True
+            else:
+                # normal flow
+                if not self.type_system.check_assignable(declared_type, init_type):
+                    raise SemanticError(f"Cannot assign {init_type} to {declared_type}")
+                scope.define(node.var_name, declared_type)
+                sym = scope.lookup(node.var_name)
+                sym.assigned = True
+        else:
+            # no initializer => define with declared_type
+            scope.define(node.var_name, declared_type)
+        return declared_type
 
     def visit_request(self, node, scope):
         self.visit(node.url_expr, scope)
@@ -224,7 +248,6 @@ class SemanticAnalyzer:
         then_scope = Scope(scope)
         self.visit(node.then_block, then_scope)
         then_scope.finalize_scope()
-
         if node.else_block:
             else_scope = Scope(scope)
             self.visit(node.else_block, else_scope)
@@ -268,7 +291,7 @@ class SemanticAnalyzer:
             if not self.type_system.check_assignable(self.current_function_return_type, r):
                 raise SemanticError("Return type mismatch: cannot assign " + r + " to " + self.current_function_return_type)
         else:
-            if self.current_function_return_type != "void" and self.current_function_return_type != "any":
+            if self.current_function_return_type not in ("void","any"):
                 raise SemanticError("Return type mismatch: function expects " + self.current_function_return_type)
         self.must_return = False
         return "void"
@@ -319,8 +342,10 @@ class SemanticAnalyzer:
         if node.op in ["<", ">", "<=", ">=", "==", "!="]:
             return "bool"
         if node.op in ["||", "&&"]:
-            if l == "any" or r == "any":
+            if l == "any" and r == "any":
                 return "any"
+            if (l == "any" and r == "bool") or (l == "bool" and r == "any"):
+                return "bool"
             if l == "bool" and r == "bool":
                 return "bool"
             raise SemanticError("Invalid types for " + node.op)
@@ -331,11 +356,11 @@ class SemanticAnalyzer:
         if node.op in ["-", "+"]:
             if e == "any":
                 return "any"
-            if e in ["int","float"]:
+            if e in ("int","float"):
                 return e
             raise SemanticError("Invalid unary op " + node.op + " for " + e)
         if node.op == "!":
-            if e == "bool" or e == "any":
+            if e in ("bool","any"):
                 return "bool"
             raise SemanticError("Invalid unary op ! for " + e)
         return "any"
@@ -367,8 +392,15 @@ class SemanticAnalyzer:
             sym = scope.lookup(node.target.name)
             if not sym:
                 raise SemanticError("Undeclared identifier " + node.target.name)
+            # If arrow function => store "function" in target symbol
+            if isinstance(t, tuple) and t[0] == "function":
+                sym.type = "function"
+                sym.extra = t[1]
+                sym.assigned = True
+                return "function"
+            # else normal assignment check
             if not self.type_system.check_assignable(sym.type, t):
-                raise SemanticError("Cannot assign " + t + " to " + sym.type)
+                raise SemanticError(f"Cannot assign {t} to {sym.type}")
             sym.used = True
             sym.assigned = True
             return sym.type
@@ -414,10 +446,8 @@ class SemanticAnalyzer:
             sig = sym.extra
             param_types = sig.get("param_types", [])
             ret_type = sig.get("return_type", "void")
-
             if len(node.args) != len(param_types):
                 raise SemanticError(f"Function '{sym.name}' called with wrong number of args")
-
             for i, arg in enumerate(node.args):
                 arg_type = self.visit(arg, scope)
                 expected = param_types[i]
@@ -439,24 +469,41 @@ class SemanticAnalyzer:
         return "any"
 
     def visit_arrow_function(self, node, scope):
-        s = Scope(scope)
-        for p in node.params:
-            s.define(p, "any")
-        old_ret = self.current_function_return_type
-        old_must_return = self.must_return
+        arrow_scope = Scope(scope)
+        param_count = len(node.params)
+        param_types = []
+
+        oldReturn = self.current_function_return_type
+        oldMustReturn = self.must_return
 
         self.current_function_return_type = "any"
         self.must_return = False
 
-        if node.is_block:
-            self.visit(node.body, s)
-        else:
-            self.visit(node.body, s)
+        for paramName in node.params:
+            arrow_scope.define(paramName, "any")
 
-        self.current_function_return_type = old_ret
-        self.must_return = old_must_return
-        s.finalize_scope()
-        return "function"
+        if node.is_block:
+            self.visit(node.body, arrow_scope)
+            arrow_return = "any"
+        else:
+            arrow_return = self.visit(node.body, arrow_scope)
+
+        arrow_scope.finalize_scope()
+
+        # gather param types from arrow_scope
+        for paramName in node.params:
+            sym = arrow_scope.lookup(paramName)
+            param_types.append(sym.type)
+
+        self.current_function_return_type = oldReturn
+        self.must_return = oldMustReturn
+        return (
+            "function",
+            {
+                "param_types": param_types,
+                "return_type": arrow_return
+            }
+        )
 
 def analyze_semantics(ast):
     analyzer = SemanticAnalyzer()
