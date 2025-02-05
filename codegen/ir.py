@@ -1,55 +1,89 @@
-"""
-Intermediate Representation for eLang compiler/codegen.
-We represent each function as a list of IRBlock's.
-Within blocks, IRInstr objects define operations. We keep concurrency
-and request instructions at this IR level for now.
-"""
 
-from typing import List, Optional, Union
+
+from typing import List, Dict, Optional, Union
+
+
+class IRType:
+    """
+    Represents a type in the IR, such as int, float, bool, string, any,
+    or advanced concurrency types like thread, lock, channel.
+    You can add generics, function types, etc. as needed.
+    """
+    def __init__(self, name: str):
+        self.name = name  # e.g. "int","float","bool","string","any","thread"
+
+    def __repr__(self):
+        return self.name
+
 
 class IRModule:
     """
-    Top-level container for the entire program's IR.
+    The entire program's IR, containing global variables, function definitions, etc.
     """
     def __init__(self):
         self.functions: List[IRFunction] = []
-        self.globals = {}  # e.g. global variables, classes, etc.
+        self.globals: Dict[str, IRGlobalVar] = {}
 
-    def add_function(self, func):
+    def add_function(self, func: 'IRFunction'):
         self.functions.append(func)
+
+    def add_global(self, gvar: 'IRGlobalVar'):
+        self.globals[gvar.name] = gvar
 
     def __repr__(self):
         lines = ["<IRModule>"]
+        for gv in self.globals.values():
+            lines.append(repr(gv))
         for f in self.functions:
             lines.append(repr(f))
         return "\n".join(lines)
 
 
+class IRGlobalVar:
+    """
+    A global variable or reference in the IR.
+    """
+    def __init__(self, name: str, ty: IRType, init_value=None):
+        self.name = name
+        self.type = ty
+        self.init_value = init_value
+
+    def __repr__(self):
+        return f"<Global {self.name}:{self.type} = {self.init_value}>"
+
+
 class IRFunction:
     """
-    Represents a single function in IR form.
-    param_types, return_type = strings from our type system ("int", "float", etc.)
-    blocks = list of IRBlock
+    A function in the IR, potentially in SSA form.
+    param_types: list of IRType for parameters
+    return_type: IRType
+    blocks: list of IRBlock
+    ssa: bool indicates whether we are in SSA form
     """
-    def __init__(self, name: str, param_types: List[str], return_type: str = "void"):
+    def __init__(self, name: str,
+                 param_types: List[IRType],
+                 return_type: IRType,
+                 ssa: bool = True):
         self.name = name
         self.param_types = param_types
         self.return_type = return_type
         self.blocks: List[IRBlock] = []
         self.temp_counter = 0
+        self.ssa = ssa
 
-    def create_temp(self) -> 'IRTemp':
+    def create_temp(self, ty: IRType) -> 'IRTemp':
         """
-        Generate a new temporary register name for this function.
+        Generate a typed SSA temp register for this function.
         """
         self.temp_counter += 1
-        return IRTemp(f"t{self.temp_counter}")
+        reg_name = f"t{self.temp_counter}"
+        return IRTemp(reg_name, ty)
 
     def add_block(self, block: 'IRBlock'):
         self.blocks.append(block)
 
     def __repr__(self):
-        lines = [f"<Function {self.name}({','.join(self.param_types)}) -> {self.return_type}>"]
+        lines = [f"<Function {self.name} params={self.param_types} -> {self.return_type} (SSA={self.ssa})>"]
         for b in self.blocks:
             lines.append(repr(b))
         return "\n".join(lines)
@@ -57,7 +91,8 @@ class IRFunction:
 
 class IRBlock:
     """
-    A basic block containing a list of instructions, with a label.
+    A basic block: label + list of IRInstructions.
+    Predecessors/successors info can be stored for advanced flow analysis.
     """
     def __init__(self, label: str):
         self.label = label
@@ -75,53 +110,75 @@ class IRBlock:
 
 class IRValue:
     """
-    Base class for anything that can be used as an operand in instructions:
-    temporaries, constants, global references, etc.
+    Base class for IR operands (constants, temps, etc.).
     """
     pass
 
 
 class IRTemp(IRValue):
     """
-    A temporary register within a function.
+    A typed SSA register, e.g. %t3 : int
     """
-    def __init__(self, name: str):
+    def __init__(self, name: str, ty: IRType):
         self.name = name
+        self.ty = ty
 
     def __repr__(self):
-        return f"%{self.name}"
+        return f"%{self.name}:{self.ty}"
 
 
 class IRConst(IRValue):
     """
-    A numeric or string constant operand.
+    A constant value (int, float, string, bool).
     """
-    def __init__(self, value):
+    def __init__(self, value, ty: IRType):
         self.value = value
+        self.ty = ty
 
     def __repr__(self):
-        if isinstance(self.value, str):
+        # If string, wrap in quotes
+        if self.ty.name == "string":
             return f"\"{self.value}\""
-        return str(self.value)
+        return f"{self.value}:{self.ty}"
 
 
-class IRGlobal(IRValue):
+class IRGlobalRef(IRValue):
     """
-    A reference to a global variable or function name in the IR.
+    A reference to a global variable or function name.
     """
-    def __init__(self, name: str):
+    def __init__(self, name: str, ty: IRType):
         self.name = name
+        self.ty = ty
 
     def __repr__(self):
-        return f"@{self.name}"
+        return f"@{self.name}:{self.ty}"
 
 
 class IRInstr:
     """
-    Base class for all instructions in our IR.
-    Each subclass handles a different operation (binop, call, spawn, etc.).
+    Base class for IR instructions.
+    Subclasses will be used for arithmetic, memory, concurrency, etc.
     """
     pass
+
+
+class PhiInstr(IRInstr):
+    """
+    SSA phi-node: dest = phi( (val1, pred_block1), (val2, pred_block2), ... )
+    """
+    def __init__(self, dest: IRTemp, incomings: List[tuple]):
+        """
+        incomings: list of (IRValue, block_label)
+        """
+        self.dest = dest
+        self.incomings = incomings
+
+    def __repr__(self):
+        parts = []
+        for val, blk in self.incomings:
+            parts.append(f"({val}, {blk})")
+        joined = ", ".join(parts)
+        return f"{self.dest} = PHI {joined}"
 
 
 class MoveInstr(IRInstr):
@@ -138,83 +195,103 @@ class MoveInstr(IRInstr):
 
 class BinOpInstr(IRInstr):
     """
-    binop dest, left, right, op
-    Example: dest = left + right
+    dest = left op right
     """
     def __init__(self, dest: IRTemp, left: IRValue, right: IRValue, op: str):
         self.dest = dest
         self.left = left
         self.right = right
-        self.op = op  # e.g. '+', '-', '*', '/', '%', '<<', '>>'
+        self.op = op
 
     def __repr__(self):
-        return f"{self.op.upper()} {self.dest} <- {self.left}, {self.right}"
+        return f"{self.dest} = {self.left} {self.op} {self.right}"
 
 
 class UnOpInstr(IRInstr):
     """
-    unary dest, src, op
-    Example: dest = -src
+    dest = op src
     """
-    def __init__(self, dest: IRTemp, src: IRValue, op: str):
+    def __init__(self, dest: IRTemp, op: str, src: IRValue):
         self.dest = dest
+        self.op = op
         self.src = src
-        self.op = op  # e.g. 'NEG', 'NOT'
 
     def __repr__(self):
-        return f"{self.op.upper()} {self.dest} <- {self.src}"
+        return f"{self.dest} = {self.op} {self.src}"
 
 
-class CallInstr(IRInstr):
+class LoadInstr(IRInstr):
     """
-    call dest, func, args[]
-    If 'dest' is None => no return value (call is used as statement).
+    dest = load address
+    For advanced memory usage
     """
-    def __init__(self, dest: Optional[IRTemp], func: IRValue, args: List[IRValue]):
+    def __init__(self, dest: IRTemp, address: IRValue):
         self.dest = dest
-        self.func = func
-        self.args = args
+        self.address = address
 
     def __repr__(self):
-        arg_str = ", ".join(repr(a) for a in self.args)
-        if self.dest is not None:
-            return f"CALL {self.dest} <- {self.func}({arg_str})"
-        else:
-            return f"CALL {self.func}({arg_str})"
+        return f"{self.dest} = LOAD {self.address}"
 
 
-class RequestInstr(IRInstr):
+class StoreInstr(IRInstr):
     """
-    Represents an HTTP request, e.g. GET/POST with optional headers/body.
-    method: str = 'GET','POST', etc.
-    url: IRValue
-    headers: IRValue or None
-    body: IRValue or None
-    dest: optional IRTemp if we store the response
+    store src -> address
     """
-    def __init__(self, dest: Optional[IRTemp], method: str, url: IRValue,
-                 headers: Optional[IRValue], body: Optional[IRValue]):
+    def __init__(self, address: IRValue, src: IRValue):
+        self.address = address
+        self.src = src
+
+    def __repr__(self):
+        return f"STORE {self.src} -> {self.address}"
+
+
+class AtomicLoadInstr(IRInstr):
+    """
+    concurrency aware load
+    """
+    def __init__(self, dest: IRTemp, address: IRValue):
         self.dest = dest
-        self.method = method
-        self.url = url
-        self.headers = headers
-        self.body = body
+        self.address = address
 
     def __repr__(self):
-        s = f"REQUEST {self.method} {self.url}"
-        if self.headers:
-            s += f" HEADERS={self.headers}"
-        if self.body:
-            s += f" BODY={self.body}"
-        if self.dest:
-            s = f"{self.dest} <- " + s
-        return s
+        return f"{self.dest} = ATOMIC_LOAD {self.address}"
+
+
+class AtomicStoreInstr(IRInstr):
+    """
+    concurrency aware store
+    """
+    def __init__(self, address: IRValue, src: IRValue):
+        self.address = address
+        self.src = src
+
+    def __repr__(self):
+        return f"ATOMIC_STORE {self.src} -> {self.address}"
+
+
+class AcquireLockInstr(IRInstr):
+    """
+    acquire a lock variable
+    """
+    def __init__(self, lockVal: IRValue):
+        self.lockVal = lockVal
+
+    def __repr__(self):
+        return f"ACQUIRE_LOCK {self.lockVal}"
+
+
+class ReleaseLockInstr(IRInstr):
+    """
+    release a lock variable
+    """
+    def __init__(self, lockVal: IRValue):
+        self.lockVal = lockVal
+
+    def __repr__(self):
+        return f"RELEASE_LOCK {self.lockVal}"
 
 
 class JumpInstr(IRInstr):
-    """
-    Unconditional jump to a block label.
-    """
     def __init__(self, label: str):
         self.label = label
 
@@ -224,8 +301,8 @@ class JumpInstr(IRInstr):
 
 class CJumpInstr(IRInstr):
     """
-    Conditional jump. The condition is in 'cond' (bool typed).
-    If cond is true => jump to true_label, else => jump to false_label
+    cond: IRValue (bool)
+    true_label, false_label: str
     """
     def __init__(self, cond: IRValue, true_label: str, false_label: str):
         self.cond = cond
@@ -238,7 +315,7 @@ class CJumpInstr(IRInstr):
 
 class ReturnInstr(IRInstr):
     """
-    Return from the function. May or may not have a value.
+    Return with optional value
     """
     def __init__(self, value: Optional[IRValue]):
         self.value = value
@@ -250,11 +327,60 @@ class ReturnInstr(IRInstr):
             return f"RETURN {self.value}"
 
 
+class CallInstr(IRInstr):
+    """
+    dest = call func(args)
+    if dest is None => no return
+    """
+    def __init__(self,
+                 dest: Optional[IRTemp],
+                 func: IRValue,
+                 args: List[IRValue]):
+        self.dest = dest
+        self.func = func
+        self.args = args
+
+    def __repr__(self):
+        arg_str = ", ".join(repr(a) for a in self.args)
+        if self.dest:
+            return f"{self.dest} = CALL {self.func}({arg_str})"
+        else:
+            return f"CALL {self.func}({arg_str})"
+
+
+class RequestInstr(IRInstr):
+    """
+    Represents an HTTP request in the IR: e.g. GET, POST, HEADERS, BODY
+    """
+    def __init__(self,
+                 dest: Optional[IRTemp],
+                 method: str,
+                 url: IRValue,
+                 headers: Optional[IRValue],
+                 body: Optional[IRValue]):
+        self.dest = dest
+        self.method = method
+        self.url = url
+        self.headers = headers
+        self.body = body
+
+    def __repr__(self):
+        base = f"REQUEST {self.method} {self.url}"
+        if self.headers:
+            base += f" HEADERS={self.headers}"
+        if self.body:
+            base += f" BODY={self.body}"
+        if self.dest:
+            return f"{self.dest} = {base}"
+        else:
+            return base
+
+
 class SpawnInstr(IRInstr):
     """
     concurrency spawn => new thread or task
-    spawnVal: IRValue (function pointer or some representation)
-    If we need a handle, we store it in 'dest'
+    spawnVal: IRValue referencing a function or closure
+    If we store handle => dest
     """
     def __init__(self, dest: Optional[IRTemp], spawnVal: IRValue):
         self.dest = dest
@@ -262,60 +388,40 @@ class SpawnInstr(IRInstr):
 
     def __repr__(self):
         if self.dest:
-            return f"SPAWN {self.dest} <- {self.spawnVal}"
+            return f"{self.dest} = SPAWN {self.spawnVal}"
         else:
             return f"SPAWN {self.spawnVal}"
 
 
-class ThreadInstr(IRInstr):
+class ThreadForkInstr(IRInstr):
     """
-    Declares/creates a new thread with some label or block
-    If there's a function-like body, we might store it or reference a block
+    Lower-level concurrency: fork a new thread entry
     """
-    def __init__(self, thread_name: str):
-        self.thread_name = thread_name
+    def __init__(self, dest: Optional[IRTemp], func: IRValue, args: List[IRValue]):
+        self.dest = dest
+        self.func = func
+        self.args = args
 
     def __repr__(self):
-        return f"THREAD {self.thread_name}"
+        arg_str = ", ".join(repr(a) for a in self.args)
+        if self.dest:
+            return f"{self.dest} = THREAD_FORK {self.func}({arg_str})"
+        else:
+            return f"THREAD_FORK {self.func}({arg_str})"
 
 
-class LockInstr(IRInstr):
+class ThreadJoinInstr(IRInstr):
     """
-    Acquire a lock on some variable or object
+    join a previously forked thread
     """
-    def __init__(self, lockVal: IRValue):
-        self.lockVal = lockVal
+    def __init__(self, threadVal: IRValue):
+        self.threadVal = threadVal
 
     def __repr__(self):
-        return f"LOCK {self.lockVal}"
-
-
-class UnlockInstr(IRInstr):
-    """
-    Release a lock
-    """
-    def __init__(self, lockVal: IRValue):
-        self.lockVal = lockVal
-
-    def __repr__(self):
-        return f"UNLOCK {self.lockVal}"
-
-
-class SleepInstr(IRInstr):
-    """
-    Sleep for the duration in 'durationVal'
-    """
-    def __init__(self, durationVal: IRValue):
-        self.durationVal = durationVal
-
-    def __repr__(self):
-        return f"SLEEP {self.durationVal}"
+        return f"THREAD_JOIN {self.threadVal}"
 
 
 class KillInstr(IRInstr):
-    """
-    Kill a thread
-    """
     def __init__(self, threadVal: IRValue):
         self.threadVal = threadVal
 
@@ -331,18 +437,15 @@ class DetachInstr(IRInstr):
         return f"DETACH {self.threadVal}"
 
 
-class JoinInstr(IRInstr):
-    def __init__(self, threadVal: IRValue):
-        self.threadVal = threadVal
+class SleepInstr(IRInstr):
+    def __init__(self, durationVal: IRValue):
+        self.durationVal = durationVal
 
     def __repr__(self):
-        return f"JOIN {self.threadVal}"
+        return f"SLEEP {self.durationVal}"
 
 
 class PrintInstr(IRInstr):
-    """
-    Print a value
-    """
     def __init__(self, val: IRValue):
         self.val = val
 
