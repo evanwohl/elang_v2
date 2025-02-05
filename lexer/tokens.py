@@ -1,3 +1,6 @@
+import re
+import struct
+
 tokens = (
     # Concurrency
     'ASYNC',
@@ -10,87 +13,28 @@ tokens = (
     'JOIN',
     'YIELD',
     'SLEEP',
+    'KILL',
+    'DETACH',
 
-    # HTTP and networking
-    'GET',
-    'POST',
-    'PUT',
-    'DELETE',
-    'HEAD',
-    'OPTIONS',
-    'PATCH',
-    'CONNECT',
-    'TRACE',
-    'WEBSOCKET',
-    'REQUEST',
-    'RESPONSE',
-    'HEADERS',
-    'BODY',
-    'COOKIE',
-    'SESSION',
+    # HTTP
+    'GET','POST','PUT','DELETE','HEAD','OPTIONS','PATCH','CONNECT','TRACE','WEBSOCKET',
+    'REQUEST','RESPONSE','HEADERS','BODY','COOKIE','SESSION',
 
     # Java-like structure
-    'FUNCTION',
-    'CLASS',
-    'VAR',
-    'PRINT',
-    'RETURN',
-    'IF',
-    'ELSE',
-    'FOR',
-    'WHILE',
-    'BREAK',
-    'CONTINUE',
-    'TRY',
-    'CATCH',
-    'FINALLY',
-    'THROW',
+    'FUNCTION','CLASS','VAR','PRINT','RETURN','IF','ELSE','FOR','WHILE','BREAK','CONTINUE',
+    'TRY','CATCH','FINALLY','THROW',
+
+    # JSON-related
+    'TRUE','FALSE','NULL',
 
     # Core lexical tokens
-    'IDENTIFIER',
-    'STRING',
-    'NUMBER',
+    'IDENTIFIER','STRING','NUMBER',
 
-    # Punctuation / simple operators
-    'LBRACE',
-    'RBRACE',
-    'LPAREN',
-    'RPAREN',
-    'COMMA',
-    'COLON',
-    'SEMICOLON',
-    'DOT',
-    'EQUALS',
-    'PLUS',
-    'MINUS',
-    'STAR',
-    'SLASH',
-    'MOD',
-    'AMPAMP',
-    'BARBAR',
-    'BANG',
-    'EQEQ',
-    'NEQ',
-    'GT',
-    'LT',
-    'GTE',
-    'LTE',
-
-    # Extended math/bitwise operators
-    'AMP',
-    'BAR',
-    'CARET',
-    'TILDE',
-    'LSHIFT',
-    'RSHIFT',
-    'DBLSTAR',
-
-    # Compound assignments
-    'PLUSEQ',
-    'MINUSEQ',
-    'STAREQ',
-    'SLASHEQ',
-    'MODEQ',
+    # Punctuation / operators
+    'LBRACE','RBRACE','LBRACK','RBRACK','LPAREN','RPAREN','COMMA','COLON','SEMICOLON','DOT',
+    'EQUALS','PLUS','MINUS','STAR','SLASH','MOD','AMPAMP','BARBAR','BANG','EQEQ','NEQ','GT',
+    'LT','GTE','LTE','AMP','BAR','CARET','TILDE','LSHIFT','RSHIFT','DBLSTAR',
+    'PLUSEQ','MINUSEQ','STAREQ','SLASHEQ','MODEQ',
 
     # Optional newline token
     'NEWLINE'

@@ -2,6 +2,10 @@ import re
 import struct
 from lexer.lexer import tokenize
 
+############################################
+# AST Node Definitions
+############################################
+
 class ASTNode: pass
 
 class ProgramNode(ASTNode):
@@ -9,9 +13,10 @@ class ProgramNode(ASTNode):
         self.body = body
 
 class FunctionNode(ASTNode):
-    def __init__(self, name, params, body, is_async=False):
+    def __init__(self, name, params, return_type, body, is_async=False):
         self.name = name
-        self.params = params
+        self.params = params           # list of (paramName, paramType)
+        self.return_type = return_type # string or None
         self.body = body
         self.is_async = is_async
 
@@ -21,8 +26,9 @@ class ClassNode(ASTNode):
         self.body = body
 
 class VarDeclNode(ASTNode):
-    def __init__(self, var_name, init_expr):
+    def __init__(self, var_name, var_type, init_expr):
         self.var_name = var_name
+        self.var_type = var_type  # string or None
         self.init_expr = init_expr
 
 class RequestNode(ASTNode):
@@ -61,8 +67,11 @@ class ReturnNode(ASTNode):
     def __init__(self, expr):
         self.expr = expr
 
-class BreakNode(ASTNode): pass
-class ContinueNode(ASTNode): pass
+class BreakNode(ASTNode):
+    pass
+
+class ContinueNode(ASTNode):
+    pass
 
 class ThrowNode(ASTNode):
     def __init__(self, expr):
@@ -77,8 +86,9 @@ class ChannelNode(ASTNode):
         self.channel_name = channel_name
 
 class ThreadNode(ASTNode):
-    def __init__(self, thread_name):
+    def __init__(self, thread_name, body=None):
         self.thread_name = thread_name
+        self.body = body
 
 class LockNode(ASTNode):
     def __init__(self, lock_var):
@@ -91,6 +101,25 @@ class UnlockNode(ASTNode):
 class SleepNode(ASTNode):
     def __init__(self, duration_expr):
         self.duration_expr = duration_expr
+
+class KillNode(ASTNode):
+    def __init__(self, thread_name):
+        self.thread_name = thread_name
+
+class DetachNode(ASTNode):
+    def __init__(self, thread_name):
+        self.thread_name = thread_name
+
+class JoinNode(ASTNode):
+    def __init__(self, thread_name):
+        self.thread_name = thread_name
+
+class YieldNode(ASTNode):
+    pass
+
+class AwaitNode(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
 
 class BinaryOpNode(ASTNode):
     def __init__(self, left, op, right):
@@ -128,6 +157,10 @@ class DictLiteralNode(ASTNode):
     def __init__(self, pairs):
         self.pairs = pairs
 
+class ArrayLiteralNode(ASTNode):
+    def __init__(self, elements):
+        self.elements = elements
+
 class PrintStmtNode(ASTNode):
     def __init__(self, expr):
         self.expr = expr
@@ -136,6 +169,21 @@ class CallNode(ASTNode):
     def __init__(self, callee, args):
         self.callee = callee
         self.args = args
+
+class MemberAccessNode(ASTNode):
+    def __init__(self, obj, field_name):
+        self.obj = obj
+        self.field_name = field_name
+
+class IndexAccessNode(ASTNode):
+    def __init__(self, arr_expr, index_expr):
+        self.arr_expr = arr_expr
+        self.index_expr = index_expr
+
+
+############################################
+# Parser
+############################################
 
 class Parser:
     def __init__(self, tokens):
@@ -170,20 +218,20 @@ class Parser:
         while self.current and self.current.type == 'NEWLINE':
             self.advance()
 
+    def skip_extra_semicolons(self):
+        while self.match('SEMICOLON'):
+            pass
+
     def parse_program(self):
         body = []
         while self.current:
             self.skip_newlines()
             if not self.current:
                 break
-            stmt = self.parse_declaration_or_statement()
-            body.append(stmt)
+            node = self.parse_declaration_or_statement()
+            body.append(node)
             self.skip_extra_semicolons()
         return ProgramNode(body)
-
-    def skip_extra_semicolons(self):
-        while self.match('SEMICOLON'):
-            pass
 
     def parse_declaration_or_statement(self):
         self.skip_newlines()
@@ -212,40 +260,74 @@ class Parser:
         self.skip_extra_semicolons()
         return stmt
 
+    def parse_function_decl(self, is_async=False):
+        """
+        function name ( param1 : type1, param2 : type2 ) : returnType {
+            ...
+        }
+        """
+        name_tok = self.expect('IDENTIFIER')
+        self.expect('LPAREN')
+        params = []
+        if self.current and self.current.type not in ('RPAREN', None):
+            params.append(self.parse_typed_param())
+            while self.match('COMMA'):
+                params.append(self.parse_typed_param())
+        self.expect('RPAREN')
+
+        # ---- TYPE ANNOTATIONS: optional return type
+        return_type = None
+        if self.match('COLON'):
+            # e.g. function foo(...) : int {
+            return_type = self.parse_type()
+
+        block = self.parse_block()
+        return FunctionNode(name_tok.value, params, return_type, block, is_async=is_async)
+
+    def parse_typed_param(self):
+        """
+        Parse 'paramName : Type' or just 'paramName'
+        """
+        param_name_tok = self.expect('IDENTIFIER')
+        param_type = None
+        if self.match('COLON'):
+            param_type = self.parse_type()
+        return (param_name_tok.value, param_type)
+
+    def parse_type(self):
+        """
+        Simple type grammar: just parse an IDENTIFIER as type name.
+        (Could expand to generics, function types, etc.)
+        """
+        if not self.current or self.current.type != 'IDENTIFIER':
+            raise Exception(f"Expected a type name (IDENTIFIER), got {self.current}")
+        tname = self.current.value
+        self.advance()
+        return tname
+
     def parse_class_decl(self):
         name_tok = self.expect('IDENTIFIER')
         body = self.parse_block()
         return ClassNode(name_tok.value, body)
 
-    def parse_function_decl(self, is_async=False):
-        name_tok = self.expect('IDENTIFIER')
-        self.expect('LPAREN')
-        params = []
-        if self.current and self.current.type not in ('RPAREN', None):
-            params.append(self.expect('IDENTIFIER').value)
-            while self.match('COMMA'):
-                params.append(self.expect('IDENTIFIER').value)
-        self.expect('RPAREN')
-        block = self.parse_block()
-        return FunctionNode(name_tok.value, params, block, is_async=is_async)
-
     def parse_block(self):
         self.expect('LBRACE')
-        stmts = []
+        statements = []
         while self.current and self.current.type != 'RBRACE':
-            stmt = self.parse_block_declaration_or_statement()
-            stmts.append(stmt)
+            stmt = self.parse_block_decl_or_stmt()
+            statements.append(stmt)
             self.skip_extra_semicolons()
         self.expect('RBRACE')
-        return BlockNode(stmts)
+        return BlockNode(statements)
 
-    def parse_block_declaration_or_statement(self):
+    def parse_block_decl_or_stmt(self):
         self.skip_newlines()
         if self.match('ASYNC'):
             if self.match('FUNCTION'):
                 fn = self.parse_function_decl(is_async=True)
                 self.skip_extra_semicolons()
                 return fn
+            # revert if not function
             self.pos -= 1
             self.current = self.tokens[self.pos]
             stmt = self.parse_statement()
@@ -263,6 +345,7 @@ class Parser:
 
     def parse_statement(self):
         self.skip_newlines()
+
         if self.match('VAR'):
             return self.parse_var_decl()
         if self.match('IF'):
@@ -282,37 +365,57 @@ class Parser:
         if self.match('CONTINUE'):
             return ContinueNode()
 
-        # parse optional blocks, then skip semicolons
+        # concurrency expansions (spawn is expression, so removed from statement match)
+        if self.match('CHANNEL'):
+            return self.parse_channel_stmt()
+        if self.match('THREAD'):
+            return self.parse_thread_decl()
+        if self.match('LOCK'):
+            return self.parse_lock_stmt()
+        if self.match('UNLOCK'):
+            return self.parse_unlock_stmt()
+        if self.match('JOIN'):
+            return self.parse_join_stmt()
+        if self.match('KILL'):
+            return self.parse_kill_stmt()
+        if self.match('DETACH'):
+            return self.parse_detach_stmt()
+        if self.match('YIELD'):
+            self.expect('SEMICOLON')
+            return YieldNode()
+        if self.match('SLEEP'):
+            return self.parse_sleep_stmt()
+        if self.match('PRINT'):
+            return self.parse_print_stmt()
+
+        # optional block
         if self.match('LBRACE'):
             self.pos -= 1
             self.current = self.tokens[self.pos]
             block_node = self.parse_block()
             return block_node
 
-        if self.match('SPAWN'):
-            return self.parse_spawn_stmt()
-        if self.match('CHANNEL'):
-            return self.parse_channel_stmt()
-        if self.match('THREAD'):
-            return self.parse_thread_stmt()
-        if self.match('LOCK'):
-            return self.parse_lock_stmt()
-        if self.match('UNLOCK'):
-            return self.parse_unlock_stmt()
-        if self.match('SLEEP'):
-            return self.parse_sleep_stmt()
-        if self.match('PRINT'):
-            return self.parse_print_stmt()
-
         return self.parse_expr_statement()
 
     def parse_var_decl(self):
+        """
+        var x : Type = someExpr;
+        var y : Type;
+        var z = 100;
+        """
         var_name = self.expect('IDENTIFIER').value
+
+        # ---- TYPE ANNOTATIONS
+        var_type = None
+        if self.match('COLON'):
+            var_type = self.parse_type()
+
         init_expr = None
         if self.match('EQUALS'):
             init_expr = self.parse_expression()
+
         self.expect('SEMICOLON')
-        return VarDeclNode(var_name, init_expr)
+        return VarDeclNode(var_name, var_type, init_expr)
 
     def parse_if_stmt(self):
         self.expect('LPAREN')
@@ -348,14 +451,25 @@ class Parser:
 
     def parse_for_init(self):
         if self.match('VAR'):
-            var_name = self.expect('IDENTIFIER').value
-            init_expr = None
-            if self.match('EQUALS'):
-                init_expr = self.parse_expression()
-            return VarDeclNode(var_name, init_expr)
+            return self.parse_var_decl_no_semicolon()
         elif self.current and self.current.type != 'SEMICOLON':
             return self.parse_expression()
         return None
+
+    def parse_var_decl_no_semicolon(self):
+        """
+        Helper for 'for' loops, e.g. for (var i=0; i<10; i=i+1)
+        We want the VarDeclNode but we don't consume a semicolon here.
+        """
+        var_name = self.expect('IDENTIFIER').value
+        var_type = None
+        if self.match('COLON'):
+            var_type = self.parse_type()
+        init_expr = None
+        if self.match('EQUALS'):
+            init_expr = self.parse_expression()
+        # don't expect semicolon here
+        return VarDeclNode(var_name, var_type, init_expr)
 
     def parse_try_stmt(self):
         try_block = self.parse_block()
@@ -383,20 +497,28 @@ class Parser:
         self.expect('SEMICOLON')
         return ReturnNode(expr)
 
-    def parse_spawn_stmt(self):
-        expr = self.parse_expression()
-        self.expect('SEMICOLON')
-        return SpawnNode(expr)
+    #########################################
+    # Concurrency expansions
+    #########################################
 
     def parse_channel_stmt(self):
         chan_name = self.expect('IDENTIFIER').value
         self.expect('SEMICOLON')
         return ChannelNode(chan_name)
 
-    def parse_thread_stmt(self):
-        thread_name = self.expect('IDENTIFIER').value
+    def parse_thread_decl(self):
+        thr_name = self.expect('IDENTIFIER').value
+        body = None
+        if self.match('LBRACE'):
+            block_stmts = []
+            while self.current and self.current.type != 'RBRACE':
+                s = self.parse_block_decl_or_stmt()
+                block_stmts.append(s)
+                self.skip_extra_semicolons()
+            self.expect('RBRACE')
+            body = BlockNode(block_stmts)
         self.expect('SEMICOLON')
-        return ThreadNode(thread_name)
+        return ThreadNode(thr_name, body)
 
     def parse_lock_stmt(self):
         lock_var = self.expect('IDENTIFIER').value
@@ -407,6 +529,21 @@ class Parser:
         lock_var = self.expect('IDENTIFIER').value
         self.expect('SEMICOLON')
         return UnlockNode(lock_var)
+
+    def parse_join_stmt(self):
+        thr = self.expect('IDENTIFIER').value
+        self.expect('SEMICOLON')
+        return JoinNode(thr)
+
+    def parse_kill_stmt(self):
+        thr = self.expect('IDENTIFIER').value
+        self.expect('SEMICOLON')
+        return KillNode(thr)
+
+    def parse_detach_stmt(self):
+        thr = self.expect('IDENTIFIER').value
+        self.expect('SEMICOLON')
+        return DetachNode(thr)
 
     def parse_sleep_stmt(self):
         duration_expr = self.parse_expression()
@@ -420,6 +557,10 @@ class Parser:
         self.expect('SEMICOLON')
         return PrintStmtNode(expr)
 
+    #########################################
+    # Expressions
+    #########################################
+
     def parse_expr_statement(self):
         expr = self.parse_expression()
         self.expect('SEMICOLON')
@@ -427,6 +568,16 @@ class Parser:
 
     def parse_expression(self):
         self.skip_newlines()
+        # Allow 'await' as an expression
+        if self.match('AWAIT'):
+            inner_expr = self.parse_expression()
+            return AwaitNode(inner_expr)
+
+        # ALLOW 'spawn' as an expression
+        if self.match('SPAWN'):
+            inner_expr = self.parse_expression()
+            return SpawnNode(inner_expr)
+
         return self.parse_assignment()
 
     def parse_assignment(self):
@@ -537,7 +688,17 @@ class Parser:
     def parse_postfix(self):
         node = self.parse_primary()
         while True:
-            if self.match('LPAREN'):
+            if self.match('DOT'):
+                # obj.field
+                field = self.expect('IDENTIFIER').value
+                node = MemberAccessNode(node, field)
+            elif self.match('LBRACK'):
+                # arr[expr]
+                idx_expr = self.parse_expression()
+                self.expect('RBRACK')
+                node = IndexAccessNode(node, idx_expr)
+            elif self.match('LPAREN'):
+                # call
                 args = []
                 if self.current and self.current.type not in ('RPAREN', None):
                     args.append(self.parse_expression())
@@ -557,6 +718,9 @@ class Parser:
             self.expect('RPAREN')
             return expr
 
+        if self.match('LBRACK'):
+            return self.parse_array_literal()
+
         if self.match('LBRACE'):
             return self.parse_dict_literal()
 
@@ -569,6 +733,14 @@ class Parser:
             val = self.current.value
             self.advance()
             return LiteralNode(val)
+
+        # booleans/null
+        if self.match('TRUE'):
+            return LiteralNode(True)
+        if self.match('FALSE'):
+            return LiteralNode(False)
+        if self.match('NULL'):
+            return LiteralNode(None)
 
         # handle request calls
         if self.match('GET','POST','PUT','DELETE','HEAD','OPTIONS','PATCH','CONNECT','TRACE'):
@@ -588,6 +760,18 @@ class Parser:
             return IdentifierNode(name)
 
         raise Exception(f"Unexpected token {self.current}")
+
+    def parse_array_literal(self):
+        elements = []
+        while self.current and self.current.type != 'RBRACK':
+            elem = self.parse_expression()
+            elements.append(elem)
+            if self.match('COMMA'):
+                continue
+            else:
+                break
+        self.expect('RBRACK')
+        return ArrayLiteralNode(elements)
 
     def parse_dict_literal(self):
         pairs = []
@@ -610,25 +794,27 @@ class Parser:
                 raise Exception(f"Expected comma or }} in dict literal, got {self.current}")
         return DictLiteralNode(pairs)
 
+
+############################################
+# parse_code entry
+############################################
+
 def parse_code(source):
-    tokens = tokenize(source)
-    parser = Parser(tokens)
+    tok_list = tokenize(source)
+    parser = Parser(tok_list)
     return parser.parse_program()
 
 if __name__ == "__main__":
-    # Quick test
-    code = r'''
-    class DemoClass {
-        function loopStuff() {
-            for (var i = 0; i < 10; i = i + 1) {
-                if (i == 5) break;
-            };
-            var j = 0;
-            while (j < 3) {
-                j = j + 1;
-            };
-        }
+    sample = r'''
+    // Example usage: strongly typed
+    function doMath(a: int, b: float): float {
+        var x: int = a + 10;
+        var y: float = spawn someOtherCall();
+        return b + x;  
     }
+
+    var z: bool;
+    z = doMath(2, 3.5) > 10;
     '''
-    ast = parse_code(code)
+    ast = parse_code(sample)
     print(ast)

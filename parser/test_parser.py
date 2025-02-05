@@ -1,235 +1,260 @@
-import re
-import struct
 import traceback
 from parser import parse_code
 
-
 def test_parser_black_box():
-    samples = [
-        # 1. Minimal empty program
-        (r'', "Empty program"),
+    """
+    Black-box tests: general usage scenarios
+    a typical user might write. This covers:
+      - typed variables/functions
+      - concurrency features (spawn, thread, lock, etc.)
+      - HTTP requests with HEADERS, BODY
+      - JSON-like dictionaries/arrays
+      - conditionals, loops, etc.
+    Each test case is fairly "normal" usage.
+    """
+    test_cases = [
+        # 1: Minimal empty program
+        (r'', "Empty input"),
 
-        # 2. Single function, no body
-        (r'function emptyFunc() {}', "Single empty function"),
-
-        # 3. Simple async function with if/else, var, print, return
+        # 2: Simple typed function with var, if/else, return
         (r'''
-        async function testFunc(a, b) {
-            var x = 42;
-            if (b == null) {
-                print "b is null";
+        function testFunc(a: int, b: int): int {
+            var x: int = 10;
+            if (a == b) {
+                return a;
             } else {
-                print "b is not null";
+                return b;
             }
-            return x;
         }
-        ''', "Async function with if/else, var, and return"),
+        ''', "Typed function with if/else, var, return"),
 
-        # 4. Class with function that includes for loop and while loop
+        # 3: Class with a typed function and loops
         (r'''
         class Demo {
-            function loopStuff() {
-                for (var i = 0; i < 10; i = i + 1) {
-                    if (i == 5) break;
-                };
-                var j = 0;
+            function loopStuff(): void {
+                for (var i: int = 0; i < 5; i = i + 1) {
+                    if (i == 2) break;
+                }
+                var j: int = 0;
                 while (j < 3) {
                     j = j + 1;
-                };
+                }
             }
         }
-        ''', "Class with function containing for loop and while loop"),
+        ''', "Class with function, typed for/while loops"),
 
-        # 5. Try/catch/finally with throw
+        # 4: Concurrency usage (spawn expression, thread, kill, detach, yield)
         (r'''
-        function tryStuff() {
+        function concurrencyTest(): void {
+            var handle = spawn someTask();
+            thread t1 {
+                print "Thread block";
+            };
+            kill t1;
+            detach t1;
+            yield;
+        }
+        ''', "Concurrency: spawn as expr, thread with block, kill, detach, yield"),
+
+        # 5: Lock/unlock, channel, sleep
+        (r'''
+        function syncTest(): void {
+            channel c1;
+            lock myLock;
+            unlock myLock;
+            sleep 2000;
+        }
+        ''', "Channel, lock/unlock, sleep"),
+
+        # 6: HTTP requests with HEADERS, BODY, dictionary
+        (r'''
+        function requestStuff(): void {
+            var resp = post "https://api.example.com" 
+                         HEADERS { "Authorization": "Bearer xyz" }
+                         BODY { "param": 42 };
+            print resp;
+        }
+        ''', "HTTP request with dictionary HEADERS/BODY"),
+
+        # 7: Arrays, dictionaries, booleans, null
+        (r'''
+        function dataStruct(): void {
+            var data: any = {
+                "list": [1, 2, 3, null],
+                "flag": true,
+                "nested": { "sub": false }
+            };
+            print data.list[2];
+        }
+        ''', "JSON arrays/objects, booleans, null"),
+
+        # 8: Dot/index chaining
+        (r'''
+        function chainTest(): void {
+            var obj = { "inner": [10,20,30] };
+            print obj.inner[1];
+            print obj.inner[1].toString();
+        }
+        ''', "Chained postfix: obj.inner[1].method()"),
+
+        # 9: Try/catch/finally, throw
+        (r'''
+        function errorStuff(): void {
             try {
-                throw "Err";
+                throw "SomethingWrong";
             } catch(e) {
                 print e;
             } finally {
                 print "Cleanup";
             }
         }
-        ''', "Try/catch/finally with throw"),
+        ''', "Try/catch/finally plus throw"),
 
-        # 6. Using concurrency: spawn, thread, lock, unlock, sleep
+        # 10: Combining concurrency + JSON + request + typed usage
         (r'''
-        function concurrencyTest() {
-            spawn doTask;
-            thread t1;
-            lock myLock;
-            unlock myLock;
-            sleep 3000;
-        }
-        ''', "Concurrency constructs"),
-
-        # 7. Requests with HEADERS, BODY, plus dict literal
-        (r'''
-        function requestTest() {
-            var resp = post "https://api.example.com" HEADERS { "Auth": "ABC123" } BODY { "param": 42 };
-            print resp;
-        }
-        ''', "HTTP request with HEADERS/BODY, dict literal"),
-
-        # 8. Nested blocks and function declarations within a class block
-        (r'''
-        class NestedStuff {
-            function outer() {
-                function inner(a) {
-                    return a + 1;
-                }
-                var x = inner(10);
-                print x;
+        async function main(): void {
+            var data = get "https://example.com" HEADERS { "User-Agent": "eLangBot" };
+            if (!data) {
+                throw "No data!";
             }
-        }
-        ''', "Nested function declaration within class block"),
-
-        # 9. Large combined script with multiple semicolons
-        (r'''
-        async function main() {
-            var data = get "https://example.com";
-            print data;;;;
-            for (var i = 0; i < 5; i = i + 1) {
-                if (i == 2) break;
-            };;;
-            function nested() {
-                return 123;
-            };;;
-        }
-
-        function otherStuff() {
-            while (true) {
-                break;
+            thread tWorker {
+                var arr: any = [1, 2, { "inside": true }];
+                print arr[2].inside;
             };
+            detach tWorker;
         }
-        ''', "Multiple statements with extra semicolons everywhere")
+        ''', "Complex usage: async, get request, concurrency, array/dict usage")
     ]
 
-    for i, (code, desc) in enumerate(samples, start=1):
-        print(f"\n--- Black-Box Test #{i}: {desc} ---")
+    for i, (code, desc) in enumerate(test_cases, start=1):
+        print(f"\n=== BLACK-BOX Test #{i}: {desc} ===")
         try:
-            ast_root = parse_code(code)
-            print("Parsed AST:", ast_root)
+            ast = parse_code(code)
+            print("Parsed AST:", ast)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"ERROR in test #{i}: {e}")
             traceback.print_exc()
 
 
 def test_parser_white_box():
-    # Carefully crafted inputs that target specific grammar branches/edge cases
-
-    # 1. Zero or multiple parameters in function
-    code1 = r'''
-    function noParams() {}
-    function multiParams(a,b,c) {
-        return a + b + c;
-    }
-    '''
-
-    # 2. Complex expression with nested unary ops and exponent
-    code2 = r'''
-    function mathHeavy() {
-        var x = !!(3 ** -2);
-        var y = -(x ** 2);
-        return y;
-    }
-    '''
-
-    # 3. For-loop initialization as expression instead of var
-    code3 = r'''
-    function forAlt() {
-        for (1+2; true; i = i+1) {}
-    }
-    '''
-
-    # 4. Handling optional block semicolons
-    code4 = r'''
-    function semicolonBlocks() {
-        {
-            print "Inside block";
-        };
-        {}
-    }
-    '''
-
-    # 5. Checking nested tries
-    code5 = r'''
-    function nestedTries() {
-        try {
-            try {
-                throw "Deep error";
-            } catch(inner) {
-                print inner;
-            }
-        } catch(outer) {
-            print outer;
-        }
-    }
-    '''
-
-    # 6. Request with HEADERS but no BODY
-    code6 = r'''
-    function partialRequest() {
-        var r = get "https://site.com" HEADERS { "UA": "Bot" };
-        print r;
-    }
-    '''
-
-    # 7. Function calls with multiple arguments + nested calls
-    code7 = r'''
-    function callTest() {
-        var res = doSomething(1, 2, nestedCall(3,4));
-        print res;
-    }
-    '''
-
-    # 8. Channel, thread usage in block
-    code8 = r'''
-    function concurrency2() {
-        channel c1;
-        thread th;
-    }
-    '''
-
-    # 9. Large dictionary with trailing commas
-    code9 = r'''
-    function dictTrailing() {
-        var data = { 
-            "k1": 1,
-            "k2": 2,
-            "k3": "str",
-        };
-        print data;
-    }
-    '''
-
+    """
+    White-box tests: specifically crafted inputs
+    that stress tricky grammar edges, typed usage,
+    concurrency combos, etc.
+    """
     test_cases = [
-        (code1, "No or multiple params in function"),
-        (code2, "Complex expression with unary ops and exponent"),
-        (code3, "For-loop initialization as expression"),
-        (code4, "Optional semicolon after block"),
-        (code5, "Nested tries"),
-        (code6, "Request HEADERS but no BODY"),
-        (code7, "Nested function calls in arguments"),
-        (code8, "Channel & thread usage in block"),
-        (code9, "Trailing comma in dictionary literal")
+        # 1: Function with no params vs multiple typed params
+        (r'''
+        function noParams(): void {}
+        function multiParams(a: int, b: string, c: bool): int {
+            return a;
+        }
+        ''', "No vs multiple typed params, typed return"),
+
+        # 2: Complex expression mixing unary ops, exponent, indexing, type usage
+        (r'''
+        function mathExpr(): float {
+            var x: bool = !!(3 ** -2);   // double bang, exponent with unary minus
+            var y = x ** 2;             // intentionally weird: x is bool, exponent?
+            print y[0];  // force index on y?
+            return 0.0;
+        }
+        ''', "Mixed unary, exponent, indexing, typing"),
+
+        # 3: For loop with expression initialization (no var), typed mismatch
+        (r'''
+        function forAlt(): void {
+            var x: float = 0.0;
+            for (x = 0; x < 10; x = x + 1) {
+                if (x == 5) break;
+            }
+        }
+        ''', "For initialization as assignment expr, typed mismatch?"),
+
+        # 4: Nested concurrency: thread within thread
+        (r'''
+        function nestedThreads(): void {
+            thread outer {
+                thread innerThread;
+            };
+        }
+        ''', "Nested concurrency constructs"),
+
+        # 5: Inline function declaration in a block
+        (r'''
+        {
+            function innerFn(a: int): int {
+                return a+1;
+            }
+            var res = innerFn(10);
+            print res;
+        }
+        ''', "Function inside block with typed param/return"),
+
+        # 6: Array/dict with trailing commas
+        (r'''
+        function trailingCommas(): void {
+            var arr = [1,2,3,];
+            var obj = { "k1": 1, "k2": 2, };
+        }
+        ''', "Trailing commas in array/dict"),
+
+        # 7: Dictionary keys that are expressions (like [keyName]) vs. strings
+        (r'''
+        function oddKeys(): void {
+            var keyName: string = "foo";
+            var obj = {
+                [keyName]: 123,
+                "bar": false
+            };
+            print obj[keyName];
+        }
+        ''', "Dictionary keys as expressions and strings"),
+
+        # 8: Deeply chained postfix combos (dot chaining vs calls vs index)
+        (r'''
+        function chainCombos(): void {
+            var data = { 
+                "arr": [ { "something": (x) => x+42 }, [0,1,2], 99 ]
+            };
+            data.arr[0].something(42).nested[2].finalCall();
+        }
+        ''', "Deeply chained postfix combos: calls, indexing, dot"),
+
+        # 9: async + spawn + kill + typed concurrency usage
+        (r'''
+        async function concurrencyAwaitTest(): void {
+            var result: any = spawn doWork();
+            await result;
+            kill result;
+        }
+        ''', "Await + spawn + kill in same function, typed var"),
+
+        # 10: Syntax pitfalls like empty dict, empty array, typed var with no init
+        (r'''
+        function emptyStructures(): void {
+            var d: any = {};
+            var a: any = [];
+            var nested = [ {}, [] ];
+            var x: int;
+        }
+        ''', "Empty dict & array, nested empty, typed var with no init")
     ]
 
     for i, (code, desc) in enumerate(test_cases, start=1):
-        print(f"\n--- White-Box Test #{i}: {desc} ---")
+        print(f"\n=== WHITE-BOX Test #{i}: {desc} ===")
         try:
-            ast_root = parse_code(code)
-            print("Parsed AST:", ast_root)
+            ast = parse_code(code)
+            print("Parsed AST:", ast)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"ERROR in test #{i}: {e}")
             traceback.print_exc()
 
 
 def main():
-    print("==== BLACK-BOX TESTS ====")
+    print("======== BLACK-BOX TESTS ========")
     test_parser_black_box()
-    print("\n==== WHITE-BOX TESTS ====")
+    print("\n======== WHITE-BOX TESTS ========")
     test_parser_white_box()
 
 
