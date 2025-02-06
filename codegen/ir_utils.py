@@ -8,16 +8,15 @@ and request-optimizing passes for a "requests-focused, hyper-fast" language.
 
 from typing import List, Dict, Set, Optional
 # We'll assume you have all these from your advanced ir.py
-from .ir import (
+from codegen.ir import (
     IRModule, IRFunction, IRBlock, IRType, IRTemp, IRConst, IRGlobalRef,
     IRInstr, PhiInstr, MoveInstr, BinOpInstr, UnOpInstr, LoadInstr,
     StoreInstr, AtomicLoadInstr, AtomicStoreInstr, AcquireLockInstr,
     ReleaseLockInstr, JumpInstr, CJumpInstr, ReturnInstr, CallInstr,
     RequestInstr, SpawnInstr, ThreadForkInstr, ThreadJoinInstr, KillInstr,
-    DetachInstr, SleepInstr, PrintInstr, ChannelSendInstr,  # existing concurrency
-    # The new concurrency instructions we just added
+    DetachInstr, SleepInstr, PrintInstr, ChannelSendInstr, ChannelRecvInstr,
+    WaitAllInstr
 )
-
 
 # -----------------------------------------------------------------------
 # IR BUILDER
@@ -70,7 +69,7 @@ class IRBuilder:
     def call(self, func, arg_list, ret_ty: IRType):
         args = []
         for a in arg_list:
-            args.append(self.ensure_value(a, IRType("any")))  # or typed
+            args.append(self.ensure_value(a, IRType("any")))  # or typed if you prefer
         if ret_ty.name == "void":
             instr = CallInstr(None, func, args)
             self.emit(instr)
@@ -98,9 +97,10 @@ class IRBuilder:
     def ensure_value(self, val, ty: IRType):
         if isinstance(val, (IRTemp, IRConst, IRGlobalRef)):
             return val
+        # if it's a Python int/float/string => wrap as IRConst
         return IRConst(val, ty)
 
-    # ---------- New concurrency-building methods ----------
+    # ---------- concurrency-building methods ----------
     def spawn(self, spawnVal, ret_ty=IRType("thread")):
         """
         spawnVal could be a function reference or something
@@ -117,59 +117,32 @@ class IRBuilder:
             return dest
 
     def channel_send(self, channel, val):
-        """
-        channel => IRValue of type channel
-        val => IRValue
-        """
         instr = ChannelSendInstr(channel, val)
         self.emit(instr)
 
     def channel_recv(self, channel, val_ty=IRType("any")):
-        """
-        Receives a value from 'channel'. Returns an IRTemp with that type
-        """
         dest = self.create_temp(val_ty)
         instr = ChannelRecvInstr(dest, channel)
         self.emit(instr)
         return dest
 
-    def wait_all(self, tasks: List[IRTemp]):
-        """
-        WaitAll for multiple concurrency tasks
-        """
+    def wait_all(self, tasks):
         instr = WaitAllInstr(tasks)
         self.emit(instr)
 
     def request_async(self, method: str, url, headers=None, body=None, ret_ty=IRType("any")):
-        """
-        Build a RequestInstr in a separate concurrency way, e.g. spawn a thread or something.
-        Just an example of how to unify concurrency+requests.
-        """
-        # e.g. might do spawn => in that spawn, do a request
-        # Or build direct concurrency. We'll do a naive approach:
-        # 1) create a function reference for the request
-        # 2) spawn it
-        # For demonstration, let's just directly return a "spawned request handle"
-        # Real logic would be more sophisticated
-        # We'll produce a "spawn" that calls request.
-        # This is purely a demonstration, may not align with your actual concurrency model
+        # Example "async" transformation not strictly required, just a placeholder
         url_val = self.ensure_value(url, IRType("string"))
         hdr_val = self.ensure_value(headers, IRType("any")) if headers else None
         body_val = self.ensure_value(body, IRType("any")) if body else None
 
-        # Could store the request info in IRConst or IRGlobalRef and spawn
-        # Then wait on it later
-        # We'll just pretend we create a "request handle"
         handle_temp = self.create_temp(ret_ty)
-        # This is contrived. A real approach might create a closure function.
         instr = RequestInstr(handle_temp, method, url_val, hdr_val, body_val)
         self.emit(instr)
-        # you'd then spawn it or store it for concurrency
         return handle_temp
 
-
 # -----------------------------------------------------------------------
-# CFG, Dominators, etc. (same as before, but you can expand concurrency)
+# CFG & DOMINATOR LOGIC
 # -----------------------------------------------------------------------
 
 def build_cfg(fn: IRFunction):
@@ -181,12 +154,13 @@ def build_cfg(fn: IRFunction):
 
     for i, b in enumerate(fn.blocks):
         if not b.instructions:
-            # fallthrough to next?
+            # fallthrough to next block
             if i+1 < len(fn.blocks):
                 nxt = fn.blocks[i+1]
                 succs[b].append(nxt)
                 preds[nxt].append(b)
             continue
+
         last = b.instructions[-1]
         if isinstance(last, JumpInstr):
             tgt = find_block_by_label(fn, last.label)
@@ -212,7 +186,6 @@ def build_cfg(fn: IRFunction):
                 preds[nxt].append(b)
 
     return preds, succs
-
 
 def find_block_by_label(fn: IRFunction, label: str) -> Optional[IRBlock]:
     for blk in fn.blocks:
@@ -244,9 +217,8 @@ def build_dominators(fn: IRFunction):
                 changed = True
     return dom
 
-
 # -----------------------------------------------------------------------
-# PASS MANAGER (same as before)
+# PASS MANAGER
 # -----------------------------------------------------------------------
 
 class PassManager:
@@ -260,12 +232,15 @@ class PassManager:
         for p in self.passes:
             p.run_on_module(module)
 
-
 # -----------------------------------------------------------------------
-# EXAMPLE PASSES: Add More Request/Concurrency Focus
+# EXAMPLE PASSES
 # -----------------------------------------------------------------------
 
 class ConstFoldingPass:
+    """
+    Folds constant arithmetic (like 2+3 => 5) ONLY if both operands are numeric constants.
+    Otherwise, we do nothing.
+    """
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
             self.run_on_function(fn)
@@ -277,6 +252,7 @@ class ConstFoldingPass:
                 if isinstance(instr, BinOpInstr):
                     folded = self.try_fold_binop(instr)
                     if folded is not None:
+                        # Replace the BinOpInstr with a MoveInstr of the folded constant
                         new_instructions.append(MoveInstr(instr.dest, folded))
                     else:
                         new_instructions.append(instr)
@@ -287,13 +263,34 @@ class ConstFoldingPass:
     def try_fold_binop(self, instr: BinOpInstr) -> Optional[IRConst]:
         left = instr.left
         right = instr.right
-        if isinstance(left, IRConst) and isinstance(right, IRConst):
+
+        # Only fold if both sides are IRConst and numeric
+        if not (isinstance(left, IRConst) and isinstance(right, IRConst)):
+            return None
+
+        # Check if both are Python numeric (int or float) and IR type is "int"/"float"
+        if (left.ty.name in ("int","float") and right.ty.name in ("int","float")
+            and isinstance(left.value, (int,float)) and isinstance(right.value, (int,float))):
+            # We can attempt a fold for +, -, *, etc.
             if instr.op == '+':
                 return IRConst(left.value + right.value, left.ty)
-            # etc. expand as needed
+            elif instr.op == '-':
+                return IRConst(left.value - right.value, left.ty)
+            elif instr.op == '*':
+                return IRConst(left.value * right.value, left.ty)
+            elif instr.op == '/':
+                # check for divide by zero, etc. or do integer vs float logic
+                if right.value == 0:
+                    return None  # skip folding if dividing by zero
+                return IRConst(left.value / right.value, left.ty)
+            # you can expand for more operators (%, etc.)
         return None
 
+
 class DeadCodeEliminationPass:
+    """
+    If an instruction writes to a temp that is never used later, remove it.
+    """
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
             self.run_on_function(fn)
@@ -304,8 +301,9 @@ class DeadCodeEliminationPass:
             new_insts = []
             for i in block.instructions:
                 dest = self.get_dest_temp(i)
+                # If there's a dest but that dest is never used => skip
                 if dest is not None and dest.name not in used:
-                    continue  # remove
+                    continue
                 new_insts.append(i)
             block.instructions = new_insts
 
@@ -318,34 +316,47 @@ class DeadCodeEliminationPass:
                         used.add(op.name)
         return used
 
-    def get_dest_temp(self, i: IRInstr):
-        # same logic as before
+    def get_dest_temp(self, i: IRInstr) -> Optional[IRTemp]:
         if hasattr(i, 'dest') and i.dest is not None:
             return i.dest
         return None
 
     def get_operands(self, i: IRInstr) -> List[IRTemp]:
-        # gather IRTemp usage from i
-        # expand concurrency instructions as well
         ops = []
         if isinstance(i, BinOpInstr):
             if isinstance(i.left, IRTemp): ops.append(i.left)
             if isinstance(i.right, IRTemp): ops.append(i.right)
+        elif isinstance(i, UnOpInstr):
+            if isinstance(i.src, IRTemp): ops.append(i.src)
         elif isinstance(i, MoveInstr):
             if isinstance(i.src, IRTemp): ops.append(i.src)
+        elif isinstance(i, CallInstr):
+            if isinstance(i.func, IRTemp):
+                ops.append(i.func)
+            for a in i.args:
+                if isinstance(a, IRTemp):
+                    ops.append(a)
         elif isinstance(i, RequestInstr):
             if isinstance(i.url, IRTemp): ops.append(i.url)
             if i.headers and isinstance(i.headers, IRTemp): ops.append(i.headers)
             if i.body and isinstance(i.body, IRTemp): ops.append(i.body)
-        # etc. for concurrency instructions
+        elif isinstance(i, CJumpInstr):
+            if isinstance(i.cond, IRTemp):
+                ops.append(i.cond)
+        elif isinstance(i, PrintInstr):
+            if isinstance(i.val, IRTemp):
+                ops.append(i.val)
+        elif isinstance(i, SpawnInstr):
+            if isinstance(i.spawnVal, IRTemp):
+                ops.append(i.spawnVal)
+        # etc. for other concurrency instructions as needed
         return ops
 
 
 class RequestBatchingPass:
     """
-    Example advanced pass: merges consecutive RequestInstr's with the same
-    domain, or transforms them into a single batched request. The specifics
-    are language-dependent. We'll do a trivial demonstration.
+    Example advanced pass: merges consecutive RequestInstr's with the same domain or pattern.
+    Naive demonstration only.
     """
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
@@ -359,33 +370,27 @@ class RequestBatchingPass:
                 if isinstance(instr, RequestInstr):
                     # naive approach: if same domain as previous, combine
                     if pending_requests and self.same_domain(pending_requests[-1], instr):
-                        # combine into one, for demonstration we just skip the new request
-                        # or we could unify them
+                        # skip or unify
                         continue
                     else:
                         pending_requests.append(instr)
                         new_insts.append(instr)
                 else:
-                    # flush pending? We'll just move on
                     new_insts.append(instr)
             block.instructions = new_insts
 
     def same_domain(self, r1: RequestInstr, r2: RequestInstr) -> bool:
-        # super naive check: if both are IRConst string for the same domain?
         if isinstance(r1.url, IRConst) and isinstance(r2.url, IRConst):
-            # parse domain from string? We'll just check substring
             url1 = r1.url.value
             url2 = r2.url.value
-            # e.g. if they share "example.com"
-            return "example.com" in url1 and "example.com" in url2
+            # naive check for "example.com"
+            return "example.com" in str(url1) and "example.com" in str(url2)
         return False
-
 
 class AsyncRequestPass:
     """
-    Transforms blocking RequestInstr into a spawn-based async approach,
-    for potential concurrency. This is a naive placeholder. Real logic
-    might require closures or advanced concurrency.
+    Transforms blocking RequestInstr into a spawn-based approach.
+    Purely a naive placeholder.
     """
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
@@ -396,19 +401,13 @@ class AsyncRequestPass:
             new_insts = []
             for instr in block.instructions:
                 if isinstance(instr, RequestInstr):
-                    # Replace with spawn of a function that does the request
-                    # We'll pretend we have a global function @do_request
-                    # So: handle = THREAD_FORK(@do_request, [method, url, headers, body])
-                    # or spawn, etc. We'll do a naive spawn
-                    # If there's a dest, we need a concurrency handle. We'll do a naive approach
+                    # Replace with spawn
                     if instr.dest:
-                        # we produce a "spawnVal" which is some closure. We'll just do IRConst for example
                         handle = instr.dest
                         spawnVal = IRConst(f"closure_for_{instr.method}", IRType("function"))
                         sp_instr = SpawnInstr(handle, spawnVal)
                         new_insts.append(sp_instr)
                     else:
-                        # no handle => just do spawn
                         spawnVal = IRConst(f"closure_for_{instr.method}", IRType("function"))
                         sp_instr = SpawnInstr(None, spawnVal)
                         new_insts.append(sp_instr)
@@ -416,13 +415,9 @@ class AsyncRequestPass:
                     new_insts.append(instr)
             block.instructions = new_insts
 
-
 class SchedulerPass:
     """
-    A naive pass that tries to reorder concurrency instructions for better parallelization:
-    e.g., move SpawnInstr or RequestInstr earlier if no dependencies,
-    push WaitAllInstr later, etc.
-    This is extremely naive demonstration.
+    Very naive reordering pass: concurrency instructions first, normal instructions after.
     """
     def run_on_module(self, module: IRModule):
         for fn in module.functions:
@@ -430,21 +425,18 @@ class SchedulerPass:
 
     def run_on_function(self, fn: IRFunction):
         for block in fn.blocks:
-            # We'll just bubble up concurrency instructions if possible
-            # Real sched pass would be much more advanced (dependency graph, topological sort, etc.)
             concurrency_insts = []
             normal_insts = []
             for instr in block.instructions:
-                if isinstance(instr, (SpawnInstr, RequestInstr, ThreadForkInstr, ChannelSendInstr)):
+                if isinstance(instr, (SpawnInstr, RequestInstr, ThreadForkInstr, ChannelSendInstr, ChannelRecvInstr)):
                     concurrency_insts.append(instr)
                 else:
                     normal_insts.append(instr)
-            # We'll reorder: concurrency first, then normal, just as a naive approach
+            # concurrency instructions first
             block.instructions = concurrency_insts + normal_insts
 
-
 # -----------------------------------------------------------------------
-# DEMO: A bigger pass pipeline
+# A bigger pass pipeline
 # -----------------------------------------------------------------------
 
 def create_big_pass_manager() -> PassManager:
@@ -455,7 +447,6 @@ def create_big_pass_manager() -> PassManager:
     pm.add_pass(SchedulerPass())
     pm.add_pass(DeadCodeEliminationPass())
     return pm
-
 
 def print_ir_module(module: IRModule, title: str = ""):
     print("====================================")

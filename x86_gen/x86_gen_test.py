@@ -177,6 +177,10 @@ def test_x86_white_box():
             }
             var combined = multiRequest();
             print combined;
+            var r3 = [1, 2, 3];
+            print r3[1];
+            var r2 = {"key": "val"};
+            print r2["key"];
             """,
             "2) Multiple requests with HEADERS/BODY"
         ),
@@ -250,4 +254,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

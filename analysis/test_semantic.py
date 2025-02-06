@@ -293,14 +293,113 @@ def test_semantic_white_box():
         ),
         (
             """
-            function mustReturnFloat(): float {
-                var x: float = 2.5;
-                if (x > 10) {
-                    return x;
-                } else {
-                    return x + 1.0;
-                }
-            }
+            function parseUrl(u: string): string {
+                if (u == null) {
+                    return "https://default.example.com";
+                };
+                return u;
+            };
+            
+            function handleErrors(e: any): void {
+                print "Error: ";
+                print e;
+            };
+            
+            class HttpBot {
+                function doRequest(method: string, endpoint: string, hdrs: any, bdy: any): any {
+                    if (method == "GET") {
+                        var r: any = GET endpoint HEADERS hdrs BODY bdy;
+                        return r;
+                    } else {
+                        var p: any = POST endpoint HEADERS hdrs BODY bdy;
+                        return p;
+                    };
+                };
+            
+                function runSequence(): void {
+                    var i: int = 0;
+                    while (i < 3) {
+                        print "Sequence step:";
+                        print i;
+                        i = i + 1;
+                    };
+                };
+            };
+            
+            channel requestChan;
+            channel responseChan;
+            
+            var globalLock: any = null;
+            
+            thread networkThread {
+                var count: int = 0;
+                while (count < 5) {
+                    lock globalLock;
+                    print "networkThread iteration:";
+                    print count;
+                    unlock globalLock;
+                    sleep 200;
+                    count = count + 1;
+                };
+            };
+            
+            async function doAllRequests(): void {
+                try {
+                    var url: string = parseUrl(null);
+                    var hdrs: any = {
+                        "User-Agent": "ExampleBot",
+                        "Accept": "application/json"
+                    };
+                    var bdy: any = {
+                        "data": [1, 2, 3]
+                    };
+            
+                    // Multiple HTTP methods:
+                    var resp1: any = await (GET url HEADERS hdrs BODY null);
+                    print resp1;
+            
+                    var resp2: any = await (POST url HEADERS hdrs BODY bdy);
+                    print resp2;
+            
+                    var resp3: any = await (PUT (url + "/update") HEADERS hdrs BODY bdy);
+                    print resp3;
+            
+                    var condition: bool = true;
+                    if (condition) {
+                        print "Conditional branch executed.";
+                    } else {
+                        print "Should not happen.";
+                    };
+                } catch (err) {
+                    handleErrors(err);
+                } finally {
+                    print "All requests done.";
+                };
+            };
+            
+            // Demonstrates an arrow function storing a numeric result (x is "any", so result is "any"):
+            var arrowFunc: any = (x) => {
+                return x + 1;
+            };
+            
+            async function main(): void {
+                // Spawn the async function:
+                spawn doAllRequests();
+            
+                print "Main is doing other work...";
+            
+                // A simple for loop:
+                for (var i: int = 0; i < 3; i = i + 1) {
+                    print i;
+                };
+            
+                // Wait for the thread to finish:
+                join networkThread;
+            
+                print "networkThread joined.";
+                print "Main done.";
+            };
+
             """,
             "Multiple return paths, all good, typed float, no error",
             False

@@ -130,7 +130,8 @@ def test_parser_black_box():
         print(f"\n=== BLACK-BOX Test #{i}: {desc} ===")
         try:
             ast = parse_code(code)
-            print("Parsed AST:", ast)
+            print("Parsed AST:", ast.body)
+            # print a string representation of the AS
         except Exception as e:
             print(f"ERROR in test #{i}: {e}")
             traceback.print_exc()
