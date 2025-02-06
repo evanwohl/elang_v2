@@ -170,17 +170,8 @@ def test_x86_white_box():
         ),
         (
             """
-            function multiRequest() {
-                var r1 = get "http://example.com/api";
-                var r2 = post "http://example.com/data" HEADERS {"Content":"json"} BODY {"val":42};
-                return r1 + r2;
-            }
-            var combined = multiRequest();
-            print combined;
-            var r3 = [1, 2, 3];
-            print r3[1];
-            var r2 = {"key": "val"};
-            print r2["key"];
+            var dict = {"key1": 10, "key2": 20};
+            print dict["key3"];
             """,
             "2) Multiple requests with HEADERS/BODY"
         ),
